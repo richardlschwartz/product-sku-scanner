@@ -289,7 +289,9 @@ def analyze():
         return jsonify({"error": str(e)}), 500
 
 
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
 if __name__ == "__main__":
-    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-    print("Starting Product SKU Scanner at http://localhost:5000")
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Starting Product SKU Scanner at http://localhost:{port}")
+    app.run(debug=True, host="0.0.0.0", port=port)
