@@ -305,6 +305,32 @@
   }
   .fullness-bar-fill.low { background: var(--red); }
 
+  /* Verification badges */
+  .ver-tag {
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .ver-tag.verified-empty { background: #dc3545; }
+  .ver-tag.verified-stocked { background: #28a745; }
+  .ver-tag.verified-timeout { background: #6c757d; }
+  .interior-desc {
+    font-size: 0.72rem;
+    color: var(--pink);
+    font-style: italic;
+    padding-left: 48px;
+    margin-top: 2px;
+  }
+  .original-count {
+    text-decoration: line-through;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-right: 4px;
+  }
+
   /* Summary bar */
   .summary-bar {
     display: flex;
@@ -414,11 +440,17 @@ function handleFile(file) {
   resultsBody.innerHTML = `
     <div class="spinner-wrap">
       <div class="spinner"></div>
-      <span style="color:var(--text-dim);">Analyzing with Claude Vision…</span>
+      <span class="spinner-text" style="color:var(--text-dim);">Analyzing with Claude Vision…</span>
     </div>`;
 
   const oldSummary = resultsPanel.querySelector('.summary-bar');
   if (oldSummary) oldSummary.remove();
+
+  // Progressive loading messages
+  const progressTimer = setTimeout(() => {
+    const txt = document.querySelector('.spinner-text');
+    if (txt) txt.textContent = 'Verifying display boxes…';
+  }, 12000);
 
   const form = new FormData();
   form.append('file', file);
@@ -426,13 +458,14 @@ function handleFile(file) {
   fetch('/analyze', { method: 'POST', body: form })
     .then(r => r.json())
     .then(data => {
+      clearTimeout(progressTimer);
       if (data.error) { showError(data.error); return; }
       debugPanel.style.display = 'flex';
       debugBody.querySelector('pre').textContent = JSON.stringify(data.results, null, 2);
       currentData = data.results;
       renderResults(data.results);
     })
-    .catch(err => showError(err.message));
+    .catch(err => { clearTimeout(progressTimer); showError(err.message); });
 }
 
 function showError(msg) {
@@ -498,14 +531,37 @@ function renderResults(data) {
         ? `<span style="background:${bfaColors[bfa]||'#6c757d'};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;margin-left:4px">${bfa.replace(/_/g,' ')}</span>`
         : '';
 
+      // Verification status badge
+      const verStatus = pos.verification_status || '';
+      let verTag = '';
+      if (verStatus === 'overridden_by_crop_check') {
+        verTag = '<span class="ver-tag verified-empty">VERIFIED EMPTY</span>';
+      } else if (verStatus === 'confirmed_stocked') {
+        verTag = '<span class="ver-tag verified-stocked">VERIFIED</span>';
+      } else if (verStatus === 'timeout') {
+        verTag = '<span class="ver-tag verified-timeout">TIMEOUT</span>';
+      }
+
+      // Show strikethrough original count if verification overrode it
+      const origCount = pos.original_estimated_count;
+      const wasOverridden = origCount !== undefined && origCount !== pos.estimated_count;
+      const countDisplay = wasOverridden
+        ? `<span class="original-count">&times;${origCount}</span>&times;${v(pos.estimated_count)}`
+        : `&times;${v(pos.estimated_count)}`;
+
+      // Interior description for display boxes
+      const interiorDesc = pos.interior_description
+        ? `<div class="interior-desc">Interior: ${escHtml(pos.interior_description)}</div>`
+        : '';
+
       const cardId = `card-${row.row_number}-${pos.position}`;
       html += `
         <div class="product-card" id="${cardId}" data-row="${row.row_number}" data-pos="${pos.position}">
           <div class="product-top">
             <span class="pos-badge">Pos ${pos.position}</span>
             <span class="product-name">${escHtml(pos.product_name)}</span>
-            ${minTag}${bfaTag}
-            <span class="product-count" id="count-${cardId}">&times;${v(pos.estimated_count)}</span>
+            ${minTag}${bfaTag}${verTag}
+            <span class="product-count" id="count-${cardId}">${countDisplay}</span>
           </div>
           <div class="method-details">
             <span class="method-tag ${chosen === 'A' || chosen === 'BOTH' ? 'chosen' : ''}">A: direct &times;${v(pos.method_a_count)}</span>
@@ -513,6 +569,7 @@ function renderResults(data) {
             ${geoInfo}
           </div>
           ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}
+          ${interiorDesc}
           <div class="override-row">
             <label>Override:</label>
             <select id="bfa-${cardId}" onchange="applyOverride('${cardId}', ${row.row_number}, ${pos.position})">
