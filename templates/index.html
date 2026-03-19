@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Product SKU Scanner</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #334155;
+    --border: #475569;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --accent: #38bdf8;
+    --accent2: #22d3ee;
+    --green: #4ade80;
+    --orange: #fb923c;
+    --pink: #f472b6;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+  header p { color: var(--text-dim); font-size: 0.85rem; }
+
+  /* Main content fills remaining height */
+  .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  /* Upload area */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(56, 189, 248, 0.05);
+  }
+  .upload-zone h2 { color: var(--text); margin-bottom: 8px; font-size: 1.1rem; }
+  .upload-zone p { color: var(--text-dim); font-size: 0.85rem; }
+  .upload-zone input { display: none; }
+  .upload-btn {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 10px 28px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  .upload-btn:hover { background: var(--accent2); }
+  .header-btn { padding: 7px 20px; font-size: 0.85rem; }
+
+  /* Side-by-side panels */
+  .panels {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    min-height: 0; /* critical for flex children to shrink */
+  }
+  @media (max-width: 900px) {
+    .panels { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .panel-header {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+    min-height: 0;
+  }
+
+  /* Image panel */
+  #image-display {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b1120;
+  }
+  #image-display img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+  #image-display .placeholder {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+  }
+
+  /* Results panel scrollbar */
+  #results-body::-webkit-scrollbar { width: 8px; }
+  #results-body::-webkit-scrollbar-track { background: var(--surface); }
+  #results-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  #results-body::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* Spinner */
+  .spinner-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 16px;
+  }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 4px solid var(--surface2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Results */
+  .row-section { margin-bottom: 16px; }
+  .row-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--accent);
+    padding: 6px 0 4px;
+    border-bottom: 1px solid var(--surface2);
+    margin-bottom: 6px;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    z-index: 1;
+  }
+  .product-card {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+    border-radius: 6px;
+    margin-bottom: 2px;
+  }
+  .product-card:hover { background: rgba(56, 189, 248, 0.04); }
+  .product-card:last-child { border-bottom: none; }
+
+  /* Override controls */
+  .override-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 5px;
+    padding-left: 48px;
+    flex-wrap: wrap;
+  }
+  .override-row label {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+  .override-row select, .override-row input[type="number"] {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+  }
+  .override-row input[type="number"] { width: 55px; }
+  .product-card.overridden {
+    border-left: 3px solid var(--accent);
+    background: rgba(56, 189, 248, 0.03);
+  }
+  .product-top {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .pos-badge {
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .product-name {
+    flex: 1;
+    color: var(--orange);
+    font-size: 0.88rem;
+  }
+  .product-count {
+    font-weight: 700;
+    color: var(--green);
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+  .min-tag {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--red);
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    flex-shrink: 0;
+    letter-spacing: 0.05em;
+    animation: pulse-min 2s ease-in-out infinite;
+  }
+  @keyframes pulse-min {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  .method-details {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    padding-left: 48px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .method-tag {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+  .method-tag.chosen {
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+  }
+  .peg-info {
+    font-size: 0.72rem;
+    color: var(--pink);
+    padding: 2px 7px;
+    background: rgba(244, 114, 182, 0.1);
+    border-radius: 4px;
+  }
+  .counting-notes {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    font-style: italic;
+    padding-left: 48px;
+    margin-top: 3px;
+  }
+  .fullness-bar {
+    display: inline-block;
+    width: 40px;
+    height: 5px;
+    background: var(--surface2);
+    border-radius: 3px;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-left: 3px;
+  }
+  .fullness-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--green);
+  }
+  .fullness-bar-fill.low { background: var(--red); }
+
+  /* Summary bar */
+  .summary-bar {
+    display: flex;
+    gap: 20px;
+    padding: 12px 16px;
+    background: rgba(56, 189, 248, 0.08);
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .summary-item { display: flex; flex-direction: column; }
+  .summary-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .summary-value { font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+
+  /* Error */
+  .error-box {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    padding: 16px;
+    color: #fca5a5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Product SKU Scanner</h1>
+  <p>Upload a product shelf photo to identify SKUs and estimate counts</p>
+  <button class="upload-btn header-btn" id="newImageBtn" style="display:none; margin-left:auto;">Choose New Image</button>
+</header>
+
+<div class="main-content">
+  <!-- Upload zone -->
+  <div class="upload-zone" id="dropZone">
+    <h2>Drop an image here or click to browse</h2>
+    <p>Supports PNG, JPEG, GIF, BMP, WebP, TIFF — up to 30 MB</p>
+    <button class="upload-btn" id="browseBtn">Choose Image</button>
+    <input type="file" id="fileInput"
+           accept=".png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff,.tif">
+  </div>
+
+  <!-- Side-by-side panels -->
+  <div class="panels" id="panels" style="display:none;">
+    <!-- Photo panel — left -->
+    <div class="panel" id="photoPanel">
+      <div class="panel-header">Photo</div>
+      <div class="panel-body" id="image-display">
+        <span class="placeholder">No image loaded</span>
+      </div>
+    </div>
+
+    <!-- Results panel — right, scrollable -->
+    <div class="panel" id="resultsPanel">
+      <div class="panel-header">Product Analysis</div>
+      <div class="panel-body" id="results-body"></div>
+    </div>
+  </div>
+
+  <!-- Debug panel — shows raw JSON -->
+  <div class="panel" id="debugPanel" style="display:none; margin-top:16px;">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+      Raw API Response
+      <button onclick="debugPanel.style.display='none'" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:1.1rem;">close</button>
+    </div>
+    <div class="panel-body" id="debug-body" style="max-height:300px; overflow-y:auto;">
+      <pre style="font-size:0.75rem; color:var(--text-dim); white-space:pre-wrap; word-break:break-all;"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const dropZone     = document.getElementById('dropZone');
+const fileInput    = document.getElementById('fileInput');
+const browseBtn    = document.getElementById('browseBtn');
+const newImageBtn  = document.getElementById('newImageBtn');
+const panels       = document.getElementById('panels');
+const imageDisp    = document.getElementById('image-display');
+const resultsBody  = document.getElementById('results-body');
+const resultsPanel = document.getElementById('resultsPanel');
+const debugPanel   = document.getElementById('debugPanel');
+const debugBody    = document.getElementById('debug-body');
+
+browseBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+dropZone.addEventListener('click', () => fileInput.click());
+newImageBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  // Show panels side by side, collapse upload zone, show header button
+  dropZone.style.display = 'none';
+  panels.style.display = 'grid';
+  newImageBtn.style.display = 'inline-block';
+
+  const url = URL.createObjectURL(file);
+  imageDisp.innerHTML = `<img src="${url}" alt="Uploaded photo">`;
+
+  // Show spinner in results
+  resultsBody.innerHTML = `
+    <div class="spinner-wrap">
+      <div class="spinner"></div>
+      <span style="color:var(--text-dim);">Analyzing with Claude Vision…</span>
+    </div>`;
+
+  const oldSummary = resultsPanel.querySelector('.summary-bar');
+  if (oldSummary) oldSummary.remove();
+
+  const form = new FormData();
+  form.append('file', file);
+
+  fetch('/analyze', { method: 'POST', body: form })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { showError(data.error); return; }
+      debugPanel.style.display = 'flex';
+      debugBody.querySelector('pre').textContent = JSON.stringify(data.results, null, 2);
+      currentData = data.results;
+      renderResults(data.results);
+    })
+    .catch(err => showError(err.message));
+}
+
+function showError(msg) {
+  resultsBody.innerHTML = `<div class="error-box"><strong>Error:</strong> ${escHtml(msg)}</div>`;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function v(val) {
+  // Display helper: show number (including 0) or dash for null/undefined/empty
+  if (val === null || val === undefined || val === '') return '—';
+  return val;
+}
+
+function renderResults(data) {
+  console.log('Raw analysis data:', JSON.stringify(data, null, 2));
+
+  const rows = data.rows || [];
+  const summary = data.summary || {};
+
+  if (!rows.length) {
+    resultsBody.innerHTML = '<p style="color:var(--text-dim);">No products detected in this image.</p>';
+    return;
+  }
+
+  let html = '';
+  for (const row of rows) {
+    html += `<div class="row-section">`;
+    html += `<div class="row-title">Row ${row.row_number}</div>`;
+    for (const pos of (row.positions || [])) {
+      const chosen = (pos.chosen_method || '').toUpperCase();
+      const fullPct = v(pos.method_b_fullness_pct);
+      const hasFullness = typeof pos.method_b_fullness_pct === 'number';
+      const cap = pos.method_b_capacity;
+      const count = pos.estimated_count;
+      const belowCapThreshold = (typeof cap === 'number' && cap > 0 && typeof count === 'number') ? (count / cap < 0.3) : false;
+      const belowAbsMin = (typeof count === 'number') && count < 2;
+      const isLow = belowAbsMin || belowCapThreshold;
+      const barFillClass = isLow ? 'fullness-bar-fill low' : 'fullness-bar-fill';
+      const fullBar = hasFullness
+        ? `<span class="fullness-bar"><span class="${barFillClass}" style="width:${pos.method_b_fullness_pct}%"></span></span>`
+        : '';
+      const minTag = isLow ? `<span class="min-tag">MIN</span>` : '';
+
+      // Space geometry info
+      const spaceDepth = pos.space_depth_inches;
+      const pkgDepth = pos.package_depth_inches;
+      const dispType = pos.display_type || 'shelf';
+      const geoInfo = (spaceDepth != null && pkgDepth != null)
+        ? `<span class="peg-info">${dispType}: ${spaceDepth}" deep / ${pkgDepth}" pkg</span>`
+        : '';
+      const bfa = pos.box_fill_assessment || '';
+      const bfaColors = {
+        'empty_box': '#dc3545', 'nearly_empty': '#fd7e14',
+        'partially_filled': '#ffc107', 'well_stocked': '#28a745',
+        'items_visible': '#17a2b8', 'not_a_box': '#6c757d'
+      };
+      const bfaTag = bfa
+        ? `<span style="background:${bfaColors[bfa]||'#6c757d'};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;margin-left:4px">${bfa.replace(/_/g,' ')}</span>`
+        : '';
+
+      const cardId = `card-${row.row_number}-${pos.position}`;
+      html += `
+        <div class="product-card" id="${cardId}" data-row="${row.row_number}" data-pos="${pos.position}">
+          <div class="product-top">
+            <span class="pos-badge">Pos ${pos.position}</span>
+            <span class="product-name">${escHtml(pos.product_name)}</span>
+            ${minTag}${bfaTag}
+            <span class="product-count" id="count-${cardId}">&times;${v(pos.estimated_count)}</span>
+          </div>
+          <div class="method-details">
+            <span class="method-tag ${chosen === 'A' || chosen === 'BOTH' ? 'chosen' : ''}">A: direct &times;${v(pos.method_a_count)}</span>
+            <span class="method-tag ${chosen === 'B' || chosen === 'BOTH' ? 'chosen' : ''}">B: ${v(pos.method_b_capacity)} cap &times; ${fullPct}% ${fullBar} = &times;${v(pos.method_b_count)}</span>
+            ${geoInfo}
+          </div>
+          ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}
+          <div class="override-row">
+            <label>Override:</label>
+            <select id="bfa-${cardId}" onchange="applyOverride('${cardId}', ${row.row_number}, ${pos.position})">
+              <option value="">— fill —</option>
+              <option value="empty_box" ${bfa==='empty_box'?'selected':''}>Empty box</option>
+              <option value="nearly_empty" ${bfa==='nearly_empty'?'selected':''}>Nearly empty</option>
+              <option value="partially_filled" ${bfa==='partially_filled'?'selected':''}>Partially filled</option>
+              <option value="well_stocked" ${bfa==='well_stocked'?'selected':''}>Well stocked</option>
+            </select>
+            <label>Count:</label>
+            <input type="number" id="cnt-${cardId}" min="0" value="${pos.estimated_count}"
+                   onchange="applyOverride('${cardId}', ${row.row_number}, ${pos.position})"
+                   oninput="applyOverride('${cardId}', ${row.row_number}, ${pos.position})"
+          </div>
+        </div>`;
+    }
+    html += `</div>`;
+  }
+  resultsBody.innerHTML = html;
+
+  // Summary bar
+  const oldSummary = resultsPanel.querySelector('.summary-bar');
+  if (oldSummary) oldSummary.remove();
+
+  const bar = document.createElement('div');
+  bar.className = 'summary-bar';
+  bar.innerHTML = `
+    <div class="summary-item">
+      <span class="summary-label">Rows</span>
+      <span class="summary-value">${summary.total_rows || '—'}</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-label">Distinct SKUs</span>
+      <span class="summary-value">${summary.total_distinct_skus || '—'}</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-label">Total Items</span>
+      <span class="summary-value">${summary.total_items || '—'}</span>
+    </div>`;
+  resultsPanel.appendChild(bar);
+}
+
+// Store current results data globally so overrides can update it
+let currentData = null;
+
+// Wrap renderResults to save data
+const _origRender = renderResults;
+// We'll just store it inline — see handleFile
+
+function applyOverride(cardId, rowNum, posNum) {
+  const bfaSel = document.getElementById('bfa-' + cardId);
+  const cntInput = document.getElementById('cnt-' + cardId);
+  const card = document.getElementById(cardId);
+
+  const newBfa = bfaSel.value;
+  let newCount = parseInt(cntInput.value, 10);
+  if (isNaN(newCount) || newCount < 0) newCount = 0;
+
+  // Enforce rules: empty_box → 0, nearly_empty → max 2
+  if (newBfa === 'empty_box') {
+    newCount = 0;
+    cntInput.value = 0;
+  } else if (newBfa === 'nearly_empty' && newCount > 2) {
+    newCount = 2;
+    cntInput.value = 2;
+  }
+
+  // Update the displayed count
+  const countEl = document.getElementById('count-' + cardId);
+  countEl.textContent = '×' + newCount;
+
+  // Mark card as user-overridden
+  card.classList.add('overridden');
+
+  // Update the bfa tag in the card
+  const bfaColors = {
+    'empty_box': '#dc3545', 'nearly_empty': '#fd7e14',
+    'partially_filled': '#ffc107', 'well_stocked': '#28a745',
+    'items_visible': '#17a2b8', 'not_a_box': '#6c757d'
+  };
+
+  // Update stored data if we have it
+  if (currentData) {
+    for (const row of (currentData.rows || [])) {
+      if (row.row_number === rowNum) {
+        for (const pos of (row.positions || [])) {
+          if (pos.position === posNum) {
+            pos.estimated_count = newCount;
+            pos.box_fill_assessment = newBfa || pos.box_fill_assessment;
+            pos.method_a_count = newCount;
+            pos.method_b_count = newCount;
+            break;
+          }
+        }
+        break;
+      }
+    }
+    // Recalculate summary
+    let totalItems = 0;
+    let totalSkus = 0;
+    for (const row of (currentData.rows || [])) {
+      for (const pos of (row.positions || [])) {
+        totalItems += (pos.estimated_count || 0);
+        totalSkus++;
+      }
+    }
+    currentData.summary.total_items = totalItems;
+    currentData.summary.total_distinct_skus = totalSkus;
+
+    // Update summary bar
+    const bar = resultsPanel.querySelector('.summary-bar');
+    if (bar) {
+      bar.innerHTML = `
+        <div class="summary-item">
+          <span class="summary-label">Rows</span>
+          <span class="summary-value">${currentData.summary.total_rows || '—'}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Distinct SKUs</span>
+          <span class="summary-value">${totalSkus}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Total Items</span>
+          <span class="summary-value">${totalItems}</span>
+        </div>`;
+    }
+  }
+
+  // Recompute MIN tag
+  const cap = currentData ? (() => {
+    for (const row of (currentData.rows || [])) {
+      if (row.row_number === rowNum) {
+        for (const pos of (row.positions || [])) {
+          if (pos.position === posNum) return pos.method_b_capacity;
+        }
+      }
+    }
+    return null;
+  })() : null;
+  const belowCapThreshold = (typeof cap === 'number' && cap > 0) ? (newCount / cap < 0.3) : false;
+  const belowAbsMin = newCount < 2;
+  const isLow = belowAbsMin || belowCapThreshold;
+
+  // Update MIN tag: find or create/remove
+  const topDiv = card.querySelector('.product-top');
+  const existingMin = topDiv.querySelector('.min-tag');
+  if (isLow && !existingMin) {
+    const tag = document.createElement('span');
+    tag.className = 'min-tag';
+    tag.textContent = 'MIN';
+    topDiv.insertBefore(tag, countEl);
+  } else if (!isLow && existingMin) {
+    existingMin.remove();
+  }
+}
+</script>
+</body>
+</html>
