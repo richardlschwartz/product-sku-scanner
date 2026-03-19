@@ -187,32 +187,6 @@
   .product-card:hover { background: rgba(56, 189, 248, 0.04); }
   .product-card:last-child { border-bottom: none; }
 
-  /* Override controls */
-  .override-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-top: 5px;
-    padding-left: 48px;
-    flex-wrap: wrap;
-  }
-  .override-row label {
-    font-size: 0.72rem;
-    color: var(--text-dim);
-  }
-  .override-row select, .override-row input[type="number"] {
-    font-size: 0.75rem;
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--surface2);
-    color: var(--text);
-  }
-  .override-row input[type="number"] { width: 55px; }
-  .product-card.overridden {
-    border-left: 3px solid var(--accent);
-    background: rgba(56, 189, 248, 0.03);
-  }
   .product-top {
     display: flex;
     align-items: baseline;
@@ -570,20 +544,6 @@ function renderResults(data) {
           </div>
           ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}
           ${interiorDesc}
-          <div class="override-row">
-            <label>Override:</label>
-            <select id="bfa-${cardId}" onchange="applyOverride('${cardId}', ${row.row_number}, ${pos.position})">
-              <option value="">— fill —</option>
-              <option value="empty_box" ${bfa==='empty_box'?'selected':''}>Empty box</option>
-              <option value="nearly_empty" ${bfa==='nearly_empty'?'selected':''}>Nearly empty</option>
-              <option value="partially_filled" ${bfa==='partially_filled'?'selected':''}>Partially filled</option>
-              <option value="well_stocked" ${bfa==='well_stocked'?'selected':''}>Well stocked</option>
-            </select>
-            <label>Count:</label>
-            <input type="number" id="cnt-${cardId}" min="0" value="${pos.estimated_count}"
-                   onchange="applyOverride('${cardId}', ${row.row_number}, ${pos.position})"
-                   oninput="applyOverride('${cardId}', ${row.row_number}, ${pos.position})"
-          </div>
         </div>`;
     }
     html += `</div>`;
@@ -612,119 +572,8 @@ function renderResults(data) {
   resultsPanel.appendChild(bar);
 }
 
-// Store current results data globally so overrides can update it
+// Store current results data globally
 let currentData = null;
-
-// Wrap renderResults to save data
-const _origRender = renderResults;
-// We'll just store it inline — see handleFile
-
-function applyOverride(cardId, rowNum, posNum) {
-  const bfaSel = document.getElementById('bfa-' + cardId);
-  const cntInput = document.getElementById('cnt-' + cardId);
-  const card = document.getElementById(cardId);
-
-  const newBfa = bfaSel.value;
-  let newCount = parseInt(cntInput.value, 10);
-  if (isNaN(newCount) || newCount < 0) newCount = 0;
-
-  // Enforce rules: empty_box → 0, nearly_empty → max 2
-  if (newBfa === 'empty_box') {
-    newCount = 0;
-    cntInput.value = 0;
-  } else if (newBfa === 'nearly_empty' && newCount > 2) {
-    newCount = 2;
-    cntInput.value = 2;
-  }
-
-  // Update the displayed count
-  const countEl = document.getElementById('count-' + cardId);
-  countEl.textContent = '×' + newCount;
-
-  // Mark card as user-overridden
-  card.classList.add('overridden');
-
-  // Update the bfa tag in the card
-  const bfaColors = {
-    'empty_box': '#dc3545', 'nearly_empty': '#fd7e14',
-    'partially_filled': '#ffc107', 'well_stocked': '#28a745',
-    'items_visible': '#17a2b8', 'not_a_box': '#6c757d'
-  };
-
-  // Update stored data if we have it
-  if (currentData) {
-    for (const row of (currentData.rows || [])) {
-      if (row.row_number === rowNum) {
-        for (const pos of (row.positions || [])) {
-          if (pos.position === posNum) {
-            pos.estimated_count = newCount;
-            pos.box_fill_assessment = newBfa || pos.box_fill_assessment;
-            pos.method_a_count = newCount;
-            pos.method_b_count = newCount;
-            break;
-          }
-        }
-        break;
-      }
-    }
-    // Recalculate summary
-    let totalItems = 0;
-    let totalSkus = 0;
-    for (const row of (currentData.rows || [])) {
-      for (const pos of (row.positions || [])) {
-        totalItems += (pos.estimated_count || 0);
-        totalSkus++;
-      }
-    }
-    currentData.summary.total_items = totalItems;
-    currentData.summary.total_distinct_skus = totalSkus;
-
-    // Update summary bar
-    const bar = resultsPanel.querySelector('.summary-bar');
-    if (bar) {
-      bar.innerHTML = `
-        <div class="summary-item">
-          <span class="summary-label">Rows</span>
-          <span class="summary-value">${currentData.summary.total_rows || '—'}</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-label">Distinct SKUs</span>
-          <span class="summary-value">${totalSkus}</span>
-        </div>
-        <div class="summary-item">
-          <span class="summary-label">Total Items</span>
-          <span class="summary-value">${totalItems}</span>
-        </div>`;
-    }
-  }
-
-  // Recompute MIN tag
-  const cap = currentData ? (() => {
-    for (const row of (currentData.rows || [])) {
-      if (row.row_number === rowNum) {
-        for (const pos of (row.positions || [])) {
-          if (pos.position === posNum) return pos.method_b_capacity;
-        }
-      }
-    }
-    return null;
-  })() : null;
-  const belowCapThreshold = (typeof cap === 'number' && cap > 0) ? (newCount / cap < 0.3) : false;
-  const belowAbsMin = newCount < 2;
-  const isLow = belowAbsMin || belowCapThreshold;
-
-  // Update MIN tag: find or create/remove
-  const topDiv = card.querySelector('.product-top');
-  const existingMin = topDiv.querySelector('.min-tag');
-  if (isLow && !existingMin) {
-    const tag = document.createElement('span');
-    tag.className = 'min-tag';
-    tag.textContent = 'MIN';
-    topDiv.insertBefore(tag, countEl);
-  } else if (!isLow && existingMin) {
-    existingMin.remove();
-  }
-}
 </script>
 </body>
 </html>
