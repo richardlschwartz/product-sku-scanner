@@ -501,7 +501,7 @@ function renderResults(data) {
         'partially_filled': '#ffc107', 'well_stocked': '#28a745',
         'items_visible': '#17a2b8', 'not_a_box': '#6c757d'
       };
-      const bfaTag = bfa
+      const bfaTag = (bfa && bfa !== 'not_a_box')
         ? `<span style="background:${bfaColors[bfa]||'#6c757d'};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;margin-left:4px">${bfa.replace(/_/g,' ')}</span>`
         : '';
 
@@ -540,6 +540,7 @@ function renderResults(data) {
           <div class="method-details">
             <span class="method-tag ${chosen === 'A' || chosen === 'BOTH' ? 'chosen' : ''}">A: direct &times;${v(pos.method_a_count)}</span>
             <span class="method-tag ${chosen === 'B' || chosen === 'BOTH' ? 'chosen' : ''}">B: ${v(pos.method_b_capacity)} cap &times; ${fullPct}% ${fullBar} = &times;${v(pos.method_b_count)}</span>
+            ${pos.method_c_applicable ? `<span class="method-tag ${chosen === 'C' || chosen.includes('C') ? 'chosen' : ''}">C: top-edge &times;${v(pos.method_c_count)}</span>` : ''}
             ${geoInfo}
           </div>
           ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}

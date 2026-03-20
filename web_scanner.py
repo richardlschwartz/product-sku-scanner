@@ -83,10 +83,34 @@ Method B — Capacity-based estimate:
     factor that in. Record as method_b_fullness_pct.
   - Compute method_b_count = round(capacity * method_b_fullness_pct / 100).
 
+Method C — Top-edge count (INDEPENDENT — do NOT anchor to Method A or B):
+  - IMPORTANT: Perform this count BEFORE looking at your Method A or B results. \
+    This must be an independent observation.
+  - If the photo is taken at ANY angle where you can look even slightly down and see \
+    the TOP EDGES of packages lined up front-to-back on a peg, shelf, or in a box, \
+    count those top edges carefully.
+  - Each distinct top edge visible = one item. Count them one by one, front to back.
+  - For peg-hung items: look along the peg rod from the front bag toward the back wall. \
+    Each bag creates a visible top edge or ridge. Count every edge you can see, including \
+    partially visible ones near the back. Standard slatwall peg rods are 10-12 inches long; \
+    candy/snack bags are typically 1.5-2.5 inches thick, so expect 4-8 items per full peg.
+  - If items are in multiple side-by-side columns, count top edges per column and multiply.
+  - Set method_c_applicable = true if the viewing angle gives ANY usable top-down perspective \
+    (even partial — most store photos are taken from a slightly elevated angle).
+  - Set method_c_applicable = false ONLY if the photo is taken perfectly straight-on at \
+    shelf level with zero downward angle.
+  - Record the count as method_c_count.
+  - If method_c_count differs from Methods A/B, trust the top-edge count — it captures \
+    items hidden behind the front-facing package that Methods A and B often miss.
+
 Choose the final estimated_count:
-  - Use the method you have higher confidence in.
-  - If similar confidence, choose the LOWER count.
-  - When in doubt, round DOWN.
+  - Compare all applicable methods (A, B, and C if applicable).
+  - If Method C is applicable and its count is HIGHER than A or B, prefer Method C — \
+    top-edge counting reveals items hidden behind the front package that direct counting misses.
+  - If two or more methods agree closely, prefer their consensus.
+  - If Methods A and B agree but Method C is significantly higher, trust Method C.
+  - Only round DOWN when Methods A/B/C all agree or when Method C is not applicable.
+  - When in doubt between A and B only, choose the LOWER count.
 
 === END DECISION TREE ===
 
@@ -119,9 +143,11 @@ Return ONLY valid JSON (no markdown, no commentary):
           "method_b_capacity": 6,
           "method_b_fullness_pct": 50,
           "method_b_count": 3,
-          "chosen_method": "B",
+          "method_c_applicable": true,
+          "method_c_count": 3,
+          "chosen_method": "C",
           "estimated_count": 3,
-          "counting_notes": "Display box present and stocked. 3 items visible inside, ~1.5in each."
+          "counting_notes": "Display box present and stocked. 3 top edges visible receding into box. Methods A, B, C agree at ~3."
         }
       ]
     }
@@ -146,7 +172,9 @@ Rules:
 - If box_appears_empty is true: estimated_count MUST be 0 (or 1-2 if you literally see items).
 - display_type: "peg", "shelf", "bin", "box", "hook", "slot".
 - ALL numeric fields must be numbers, never null.
-- chosen_method: "A", "B", or "both".
+- method_c_applicable: true/false — can you see the top edges of packages from the camera angle?
+- method_c_count: number of items counted by top edges (only when method_c_applicable = true, otherwise 0).
+- chosen_method: "A", "B", "C", or a combination like "A+C".
 - When in doubt, round DOWN.
 """
 
@@ -407,6 +435,8 @@ def analyze_image(path: str) -> dict:
             pos.setdefault("method_b_capacity", None)
             pos.setdefault("method_b_fullness_pct", None)
             pos.setdefault("method_b_count", None)
+            pos.setdefault("method_c_applicable", False)
+            pos.setdefault("method_c_count", None)
             pos.setdefault("chosen_method", "A")
             pos.setdefault("counting_notes", "")
             pos.setdefault("has_display_box", False)
