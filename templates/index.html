@@ -334,17 +334,17 @@
 <header>
   <h1>Product SKU Scanner</h1>
   <p>Upload a product shelf photo to identify SKUs and estimate counts</p>
-  <button class="upload-btn header-btn" id="newImageBtn" style="display:none; margin-left:auto;">Choose New Image</button>
+  <button class="upload-btn header-btn" id="newImageBtn" style="display:none; margin-left:auto;">Choose New File</button>
 </header>
 
 <div class="main-content">
   <!-- Upload zone -->
   <div class="upload-zone" id="dropZone">
-    <h2>Drop an image here or click to browse</h2>
-    <p>Supports PNG, JPEG, GIF, BMP, WebP, TIFF — up to 30 MB</p>
-    <button class="upload-btn" id="browseBtn">Choose Image</button>
+    <h2>Drop an image or video here, or click to browse</h2>
+    <p>Images: PNG, JPEG, GIF, BMP, WebP, TIFF — Video: MP4, MOV, AVI, MKV, WebM — up to 30 MB</p>
+    <button class="upload-btn" id="browseBtn">Choose File</button>
     <input type="file" id="fileInput"
-           accept=".png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff,.tif">
+           accept=".png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff,.tif,.mp4,.mov,.avi,.mkv,.webm">
   </div>
 
   <!-- Side-by-side panels -->
@@ -408,38 +408,60 @@ function handleFile(file) {
   newImageBtn.style.display = 'inline-block';
 
   const url = URL.createObjectURL(file);
-  imageDisp.innerHTML = `<img src="${url}" alt="Uploaded photo">`;
+  const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(file.name);
+
+  if (isVideo) {
+    imageDisp.innerHTML = `<video src="${url}" controls muted style="max-width:100%;max-height:100%;border-radius:4px;"></video>`;
+  } else {
+    imageDisp.innerHTML = `<img src="${url}" alt="Uploaded photo">`;
+  }
 
   // Show spinner in results
+  const spinnerMsg = isVideo ? 'Extracting frames from video…' : 'Analyzing with Claude Vision…';
   resultsBody.innerHTML = `
     <div class="spinner-wrap">
       <div class="spinner"></div>
-      <span class="spinner-text" style="color:var(--text-dim);">Analyzing with Claude Vision…</span>
+      <span class="spinner-text" style="color:var(--text-dim);">${spinnerMsg}</span>
     </div>`;
 
   const oldSummary = resultsPanel.querySelector('.summary-bar');
   if (oldSummary) oldSummary.remove();
 
   // Progressive loading messages
-  const progressTimer = setTimeout(() => {
-    const txt = document.querySelector('.spinner-text');
-    if (txt) txt.textContent = 'Verifying display boxes…';
-  }, 12000);
+  let progressStep = 0;
+  const videoMessages = [
+    'Analyzing frames with Claude Vision…',
+    'Still analyzing frames… (this takes a minute for video)',
+    'Verifying display boxes…',
+    'Aggregating results across frames…'
+  ];
+  const imageMessages = [
+    'Verifying display boxes…'
+  ];
+  const messages = isVideo ? videoMessages : imageMessages;
+
+  const progressTimer = setInterval(() => {
+    if (progressStep < messages.length) {
+      const txt = document.querySelector('.spinner-text');
+      if (txt) txt.textContent = messages[progressStep];
+      progressStep++;
+    }
+  }, isVideo ? 15000 : 12000);
 
   const form = new FormData();
   form.append('file', file);
 
-  fetch('/analyze', { method: 'POST', body: form })
+  fetch('/analyze', { method: 'POST', body: form, signal: AbortSignal.timeout(300000) })
     .then(r => r.json())
     .then(data => {
-      clearTimeout(progressTimer);
+      clearInterval(progressTimer);
       if (data.error) { showError(data.error); return; }
       debugPanel.style.display = 'flex';
       debugBody.querySelector('pre').textContent = JSON.stringify(data.results, null, 2);
       currentData = data.results;
       renderResults(data.results);
     })
-    .catch(err => { clearTimeout(progressTimer); showError(err.message); });
+    .catch(err => { clearInterval(progressTimer); showError(err.message); });
 }
 
 function showError(msg) {
@@ -528,6 +550,12 @@ function renderResults(data) {
         ? `<div class="interior-desc">Interior: ${escHtml(pos.interior_description)}</div>`
         : '';
 
+      // Frame counts info (for video multi-frame analysis)
+      const frameCounts = pos.frame_counts;
+      const frameTag = (frameCounts && frameCounts.length > 1)
+        ? `<span class="method-tag" style="background:rgba(34,211,238,0.15);color:var(--accent2);border:1px solid rgba(34,211,238,0.3);">Frames: [${frameCounts.join(', ')}]</span>`
+        : '';
+
       const cardId = `card-${row.row_number}-${pos.position}`;
       html += `
         <div class="product-card" id="${cardId}" data-row="${row.row_number}" data-pos="${pos.position}">
@@ -541,6 +569,7 @@ function renderResults(data) {
             <span class="method-tag ${chosen === 'A' || chosen === 'BOTH' ? 'chosen' : ''}">A: direct &times;${v(pos.method_a_count)}</span>
             <span class="method-tag ${chosen === 'B' || chosen === 'BOTH' ? 'chosen' : ''}">B: ${v(pos.method_b_capacity)} cap &times; ${fullPct}% ${fullBar} = &times;${v(pos.method_b_count)}</span>
             ${pos.method_c_applicable ? `<span class="method-tag ${chosen === 'C' || chosen.includes('C') ? 'chosen' : ''}">C: top-edge &times;${v(pos.method_c_count)}</span>` : ''}
+            ${frameTag}
             ${geoInfo}
           </div>
           ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}
@@ -557,6 +586,13 @@ function renderResults(data) {
 
   const bar = document.createElement('div');
   bar.className = 'summary-bar';
+  const framesCount = data.frames_analyzed || 0;
+  const framesHtml = framesCount > 1
+    ? `<div class="summary-item">
+        <span class="summary-label">Frames Analyzed</span>
+        <span class="summary-value">${framesCount}</span>
+       </div>`
+    : '';
   bar.innerHTML = `
     <div class="summary-item">
       <span class="summary-label">Rows</span>
@@ -569,7 +605,8 @@ function renderResults(data) {
     <div class="summary-item">
       <span class="summary-label">Total Items</span>
       <span class="summary-value">${summary.total_items || '—'}</span>
-    </div>`;
+    </div>
+    ${framesHtml}`;
   resultsPanel.appendChild(bar);
 }
 

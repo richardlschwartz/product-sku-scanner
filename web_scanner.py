@@ -8,20 +8,25 @@ for product/SKU identification, and displays results in the browser.
 import base64
 import concurrent.futures
 import json
+import math
 import os
 import re
+import statistics
 import uuid
 from io import BytesIO
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from PIL import Image
 import anthropic
+import cv2
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.path.join(os.path.dirname(__file__), "uploads")
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024  # 30 MB
 
-ALLOWED_EXT = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif"}
+ALLOWED_IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif"}
+ALLOWED_VIDEO_EXT = {"mp4", "mov", "avi", "mkv", "webm"}
+ALLOWED_EXT = ALLOWED_IMAGE_EXT | ALLOWED_VIDEO_EXT
 
 VISION_PROMPT = """\
 You are analyzing a product shelf or display photo. Identify every product position \
@@ -528,6 +533,189 @@ def analyze_image(path: str) -> dict:
     return parsed
 
 
+def extract_frames(video_path: str, max_frames: int = 5, min_interval_sec: float = 2.0) -> list:
+    """Extract evenly-spaced frames from a video file.
+
+    Returns a list of dicts: [{"path": "/tmp/frame_0.jpg", "timestamp_sec": 0.0}, ...]
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError("Could not open video file")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_sec = total_frames / fps
+
+    # Determine frame interval
+    if duration_sec <= 0:
+        raise ValueError("Video has zero duration")
+
+    # Space frames evenly across the video, respecting min_interval
+    num_frames = min(max_frames, max(1, int(duration_sec / min_interval_sec)))
+    interval_sec = duration_sec / (num_frames + 1)  # +1 to avoid very start/end
+
+    frames = []
+    upload_dir = os.path.dirname(video_path)
+
+    for i in range(num_frames):
+        timestamp = interval_sec * (i + 1)
+        frame_num = int(timestamp * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        frame_filename = f"{uuid.uuid4().hex}_frame_{i}.jpg"
+        frame_path = os.path.join(upload_dir, frame_filename)
+        cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        frames.append({
+            "path": frame_path,
+            "filename": frame_filename,
+            "timestamp_sec": round(timestamp, 1),
+        })
+
+    cap.release()
+    return frames
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a product name for fuzzy matching."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def aggregate_results(frame_results: list) -> dict:
+    """Aggregate analysis results from multiple frames into a single result.
+
+    Matches positions across frames by row_number + similar product name,
+    then takes the median count for each position.
+    """
+    if not frame_results:
+        return {"rows": [], "summary": {"total_rows": 0, "total_distinct_skus": 0, "total_items": 0}}
+
+    if len(frame_results) == 1:
+        r = frame_results[0]
+        # Tag single-frame results
+        for row in r.get("rows", []):
+            for pos in row.get("positions", []):
+                pos["frames_analyzed"] = 1
+                pos["frame_counts"] = [pos.get("estimated_count", 0)]
+        return r
+
+    # Build a dict keyed by (row_number, normalized_name) → list of position dicts
+    position_map = {}  # (row_num, norm_name) → [pos_dicts...]
+
+    for result in frame_results:
+        for row in result.get("rows", []):
+            row_num = row.get("row_number", 0)
+            for pos in row.get("positions", []):
+                name = pos.get("product_name", "")
+                norm = _normalize_name(name)
+                key = (row_num, norm)
+
+                # Try exact key match first; if not, check for partial overlap
+                matched_key = None
+                for existing_key in position_map:
+                    if existing_key[0] == row_num:
+                        # Check if names share at least 60% of characters
+                        existing_norm = existing_key[1]
+                        if norm and existing_norm:
+                            overlap = sum(1 for c in norm if c in existing_norm)
+                            similarity = overlap / max(len(norm), len(existing_norm))
+                            if similarity > 0.6:
+                                matched_key = existing_key
+                                break
+
+                if matched_key:
+                    position_map[matched_key].append(pos)
+                else:
+                    position_map[key] = [pos]
+
+    # Now build aggregated rows
+    rows_dict = {}  # row_num → list of aggregated positions
+    for (row_num, _), positions in position_map.items():
+        counts = [p.get("estimated_count", 0) for p in positions]
+        median_count = int(round(statistics.median(counts)))
+
+        # For box emptiness: majority vote
+        empty_votes = sum(1 for p in positions if p.get("box_appears_empty", False))
+        majority_empty = empty_votes > len(positions) / 2
+
+        # Pick the "best" frame's data as the base (highest confidence / most detail)
+        base = max(positions, key=lambda p: len(p.get("counting_notes", "")))
+        base = dict(base)  # copy
+
+        base["estimated_count"] = median_count
+        base["frames_analyzed"] = len(positions)
+        base["frame_counts"] = counts
+
+        if majority_empty:
+            base["box_appears_empty"] = True
+            base["box_fill_assessment"] = "empty_box"
+            base["estimated_count"] = 0
+
+        # Collect per-method counts across frames for transparency
+        a_counts = [p.get("method_a_count", 0) for p in positions if p.get("method_a_count") is not None]
+        b_counts = [p.get("method_b_count", 0) for p in positions if p.get("method_b_count") is not None]
+        c_counts = [p.get("method_c_count", 0) for p in positions if p.get("method_c_count") is not None]
+        if a_counts:
+            base["method_a_count"] = int(round(statistics.median(a_counts)))
+        if b_counts:
+            base["method_b_count"] = int(round(statistics.median(b_counts)))
+        if c_counts:
+            base["method_c_count"] = int(round(statistics.median(c_counts)))
+
+        rows_dict.setdefault(row_num, []).append(base)
+
+    # Build final structure
+    rows = []
+    for row_num in sorted(rows_dict.keys()):
+        positions = sorted(rows_dict[row_num], key=lambda p: p.get("position", 0))
+        rows.append({"row_number": row_num, "positions": positions})
+
+    total_items = sum(p.get("estimated_count", 0) for r in rows for p in r["positions"])
+    total_skus = sum(len(r["positions"]) for r in rows)
+
+    return {
+        "rows": rows,
+        "frames_analyzed": len(frame_results),
+        "summary": {
+            "total_rows": len(rows),
+            "total_distinct_skus": total_skus,
+            "total_items": total_items,
+        },
+    }
+
+
+def analyze_video(video_path: str) -> dict:
+    """Extract frames from a video, analyze each, and aggregate results."""
+    frames = extract_frames(video_path, max_frames=5)
+    print(f"=== Extracted {len(frames)} frames from video ===")
+
+    frame_results = []
+    frame_thumbnails = []
+
+    for i, frame_info in enumerate(frames):
+        print(f"=== Analyzing frame {i + 1}/{len(frames)} (t={frame_info['timestamp_sec']}s) ===")
+        try:
+            result = analyze_image(frame_info["path"])
+            frame_results.append(result)
+            frame_thumbnails.append({
+                "url": f"/uploads/{frame_info['filename']}",
+                "timestamp_sec": frame_info["timestamp_sec"],
+            })
+        except Exception as e:
+            print(f"  Frame {i + 1} analysis failed: {e}")
+            continue
+
+    if not frame_results:
+        raise ValueError("No frames could be analyzed from the video")
+
+    aggregated = aggregate_results(frame_results)
+    aggregated["frame_thumbnails"] = frame_thumbnails
+    aggregated["frames_analyzed"] = len(frame_results)
+    return aggregated
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -556,8 +744,15 @@ def analyze():
     file.save(filepath)
 
     try:
-        data = analyze_image(filepath)
-        return jsonify({"image_url": f"/uploads/{filename}", "results": data})
+        is_video = ext in ALLOWED_VIDEO_EXT
+        if is_video:
+            data = analyze_video(filepath)
+            # Use first frame thumbnail as the display image
+            first_thumb = data.get("frame_thumbnails", [{}])[0].get("url", "")
+            return jsonify({"image_url": first_thumb, "is_video": True, "results": data})
+        else:
+            data = analyze_image(filepath)
+            return jsonify({"image_url": f"/uploads/{filename}", "is_video": False, "results": data})
     except json.JSONDecodeError as e:
         return jsonify({"error": f"Failed to parse Claude response: {e}"}), 500
     except anthropic.APIError as e:

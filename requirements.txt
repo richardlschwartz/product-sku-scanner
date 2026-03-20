@@ -2,3 +2,4 @@ flask
 pillow
 anthropic
 gunicorn
+opencv-python-headless
