@@ -30,69 +30,83 @@ ALLOWED_EXT = ALLOWED_IMAGE_EXT | ALLOWED_VIDEO_EXT
 
 VISION_PROMPT = """\
 You are analyzing a product shelf or display photo. Identify every product position \
-and estimate the count of sellable items at each position.
+and estimate the count of INDIVIDUAL SELLABLE PACKAGES at each position.
 
 Scan from TOP-LEFT to BOTTOM-RIGHT, row by row. A "row" is a horizontal shelf level.
 
-=== DECISION TREE — Follow these steps IN ORDER for each position ===
+=== WHAT TO COUNT ===
 
-STEP 1: IS THERE AN ENCLOSING DISPLAY BOX?
-Look at the position. Is the product contained in a cardboard display box, shipper tray, \
-or open-top case? These are branded cardboard containers that hold individual items inside.
-  → If YES: go to STEP 2.
-  → If NO (items on a peg, hook, bare shelf, etc.): go to STEP 3. Set has_display_box = false.
+Count ONLY individual wrapped/packaged items that a customer could pick up and buy. \
+Each physically separate package = 1 item.
 
-STEP 2: IS THE DISPLAY BOX EMPTY?
-Look INSIDE the box opening. Ignore the box exterior (the printed brand graphics on the \
-cardboard walls — that is advertising, NOT inventory).
+CRITICAL — CARDBOARD DISPLAY BOXES AND TRAYS:
+Most products on these shelves sit inside cardboard display boxes or trays. These boxes \
+have a CUTOUT or CUTDOWN on the front — the front panel of the cardboard is cut lower \
+so customers can reach inside. This creates a visible horizontal CUT LINE across the \
+front of the box.
 
-MANDATORY: Before deciding, write an interior_description field describing ONLY what you \
-physically see through the box opening. Describe the actual physical contents you observe: \
-"flat cardboard bottom visible, no items inside", "3 wrapped candy bars lying flat", \
-"box interior is hollow with visible cardboard floor", etc. \
-Do NOT describe what is printed/graphic on the cardboard walls — those are ads, not items. \
-If you catch yourself describing a logo, product image, or brand graphic, STOP — that is \
-the box EXTERIOR, not the interior.
+HOW TO COUNT ITEMS IN A DISPLAY BOX:
+1. FIND THE CUT LINE — the horizontal edge where the front cardboard panel was cut down. \
+   This is usually a rough or straight horizontal line across the front of the box, often \
+   at roughly the midpoint of the box height.
+2. EVERYTHING BELOW THE CUT LINE is the OUTSIDE of the box — this is printed cardboard \
+   with brand logos, product photos, and advertising. It is FLAT. IGNORE IT COMPLETELY. \
+   Nothing below the cut line is a real item.
+3. ONLY LOOK ABOVE THE CUT LINE — through the opening, into the interior of the box. \
+   What do you see inside?
+   - If you see the flat cardboard BOTTOM of the box (plain brown/tan surface), or \
+     mostly empty space with shadows → the box is EMPTY. Count = 0.
+   - If you see actual packages sitting inside, count ONLY those physical packages \
+     that are above the cut line and inside the box.
+4. The area INSIDE the box is typically DARKER and more shadowed than the bright \
+   printed exterior below the cut line. Use this contrast as a cue.
 
-Focus ONLY on what is INSIDE the box opening:
-  - Can you see the flat bottom of the box (plain cardboard)?
-  - Is the interior mostly hollow/empty space?
-  - Are there fewer than 3 distinct individual wrapped packages visible inside?
-  - Does the box interior look flat and uniform rather than bumpy with stacked items?
+USE EDGE CONTRAST TO FIND THE CUT LINE:
+The cut line creates a visible CONTRAST BOUNDARY across the front of the box:
+  - BELOW the cut line: bright, colorful, evenly-lit printed graphics (the exterior)
+  - ABOVE the cut line: darker, shadowed, uneven interior (or the back wall of the box)
+Look for this brightness/color discontinuity. The printed exterior is typically BRIGHTER \
+and more saturated than the interior. If the area above the cut line is dark, shadowed, \
+or shows plain cardboard — the box is empty or nearly empty.
 
-If the box interior appears empty or nearly empty:
-  → Set has_display_box = true, box_appears_empty = true
-  → Set estimated_count = 0 (or 1-2 if you can see that many individual items inside)
-  → Set box_fill_assessment = "empty_box" or "nearly_empty"
-  → STOP counting for this position. Do not proceed to Step 3.
+Also look for the RAW CARDBOARD EDGE itself — the cut line often shows the brown/tan \
+inner layer of the cardboard where it was cut, creating a thin horizontal stripe that \
+contrasts with the printed exterior below and the interior above.
 
-If the box clearly contains multiple individual items:
-  → Set has_display_box = true, box_appears_empty = false
-  → Set box_fill_assessment = "partially_filled" or "well_stocked"
-  → Go to STEP 3 to count ONLY the individual items INSIDE the box.
+COMMON MISTAKE TO AVOID:
+A Reese's display box has bright orange Reese's product images PRINTED on its front \
+panel (below the cut line). These are NOT real packages — they are flat ink on cardboard. \
+The actual Reese's packages (if any) would be visible ABOVE the cut line, inside the box. \
+If you only see the printed front panel and dark/shadowed space above the cut line, count = 0. \
+The same applies to ALL display boxes — Kinder Bueno, Snickers, M&Ms, etc.
 
-STEP 3: COUNT INDIVIDUAL ITEMS
-Now count the sellable items. If there is a display box, count only what is INSIDE it.
+DO NOT COUNT:
+  - Anything below the cut line on a display box — that is the printed exterior
+  - The cardboard display container itself
+  - Shelf labels, price tags, or signage
+  - Printed product images on cardboard — these are advertising, not inventory
+
+=== THREE COUNTING METHODS ===
 
 Method A — Direct visual count:
-  - Count each individual wrapped/packaged item you can see as a distinct unit.
+  - Count each individual wrapped/packaged item you can see as a distinct physical object.
   - For items behind the front row, estimate based on visible depth and shadows.
   - Record as method_a_count.
 
 Method B — Capacity-based estimate:
-  - Estimate the space depth (rod length for pegs, shelf depth, or box interior depth) \
+  - Estimate the space depth (rod length for pegs, shelf depth, or tray interior depth) \
     in inches. Record as space_depth_inches.
   - Estimate ONE package's depth in inches. Record as package_depth_inches.
   - Compute capacity = floor(space_depth_inches / package_depth_inches).
-  - Estimate fullness (0-100%). If has_display_box and you can see empty space inside, \
-    factor that in. Record as method_b_fullness_pct.
+  - Estimate fullness (0-100%). Look at how much of the available space is occupied \
+    by actual packages. Empty space = lower fullness. Record as method_b_fullness_pct.
   - Compute method_b_count = round(capacity * method_b_fullness_pct / 100).
 
 Method C — Top-edge count (INDEPENDENT — do NOT anchor to Method A or B):
   - IMPORTANT: Perform this count BEFORE looking at your Method A or B results. \
     This must be an independent observation.
   - If the photo is taken at ANY angle where you can look even slightly down and see \
-    the TOP EDGES of packages lined up front-to-back on a peg, shelf, or in a box, \
+    the TOP EDGES of packages lined up front-to-back on a peg, shelf, or in a tray, \
     count those top edges carefully.
   - Each distinct top edge visible = one item. Count them one by one, front to back.
   - For peg-hung items: look along the peg rod from the front bag toward the back wall. \
@@ -105,27 +119,18 @@ Method C — Top-edge count (INDEPENDENT — do NOT anchor to Method A or B):
   - Set method_c_applicable = false ONLY if the photo is taken perfectly straight-on at \
     shelf level with zero downward angle.
   - Record the count as method_c_count.
-  - If method_c_count differs from Methods A/B, trust the top-edge count — it captures \
-    items hidden behind the front-facing package that Methods A and B often miss.
 
 Choose the final estimated_count:
   - Compare all applicable methods (A, B, and C if applicable).
   - If Method C is applicable and its count is HIGHER than A or B, prefer Method C — \
     top-edge counting reveals items hidden behind the front package that direct counting misses.
   - If two or more methods agree closely, prefer their consensus.
-  - If Methods A and B agree but Method C is significantly higher, trust Method C.
-  - Only round DOWN when Methods A/B/C all agree or when Method C is not applicable.
-  - When in doubt between A and B only, choose the LOWER count.
+  - Only round DOWN when all methods agree or when Method C is not applicable.
+  - When in doubt, choose the LOWER count.
+  - If you can see 0 individual packages at a position, the count is 0. \
+    An empty tray or shelf slot with no packages = 0.
 
-=== END DECISION TREE ===
-
-CRITICAL REMINDERS:
-  - A display box's printed exterior graphics are NEVER items. Do not count them.
-  - If your interior_description mentions "logo", "graphic", "printed", "picture", or \
-    "branding", you are likely describing the box exterior — re-evaluate and look deeper \
-    into the box opening for actual physical items.
-  - If box_appears_empty is true, estimated_count MUST be 0 (or 1-2 at most).
-  - Every numeric field must have a value, never null.
+=== END COUNTING METHODS ===
 
 Return ONLY valid JSON (no markdown, no commentary):
 {
@@ -136,12 +141,7 @@ Return ONLY valid JSON (no markdown, no commentary):
         {
           "position": 1,
           "product_name": "Brand Name Product Description Size",
-          "has_display_box": true,
-          "box_appears_empty": false,
-          "interior_description": "3 individually wrapped candy bars visible lying flat inside the box",
-          "box_fill_assessment": "well_stocked",
-          "bbox_pct": [10, 25, 30, 55],
-          "display_type": "box",
+          "display_type": "shelf",
           "method_a_count": 4,
           "space_depth_inches": 10,
           "package_depth_inches": 1.5,
@@ -152,7 +152,7 @@ Return ONLY valid JSON (no markdown, no commentary):
           "method_c_count": 3,
           "chosen_method": "C",
           "estimated_count": 3,
-          "counting_notes": "Display box present and stocked. 3 top edges visible receding into box. Methods A, B, C agree at ~3."
+          "counting_notes": "3 individually wrapped packages visible. Top edges confirm 3 items deep."
         }
       ]
     }
@@ -167,53 +167,37 @@ Return ONLY valid JSON (no markdown, no commentary):
 Rules:
 - Be specific with product names (brand, variant, size if readable).
 - If you cannot read the label, describe visually (e.g., "Red can, unknown brand").
-- has_display_box: true/false — is there an enclosing cardboard display container?
-- box_appears_empty: true/false — does the box interior look empty? (only when has_display_box=true)
-- interior_description: REQUIRED when has_display_box=true. Describe what you physically see \
-  inside the box opening. NOT what is printed on the box exterior.
-- box_fill_assessment: "empty_box", "nearly_empty", "partially_filled", "well_stocked", or "not_a_box".
-- bbox_pct: [left%, top%, right%, bottom%] — approximate bounding box of this position as \
-  percentage of full image dimensions (0-100). Does not need to be exact.
-- If box_appears_empty is true: estimated_count MUST be 0 (or 1-2 if you literally see items).
-- display_type: "peg", "shelf", "bin", "box", "hook", "slot".
+- display_type: "peg", "shelf", "bin", "tray", "hook", "slot".
 - ALL numeric fields must be numbers, never null.
 - method_c_applicable: true/false — can you see the top edges of packages from the camera angle?
 - method_c_count: number of items counted by top edges (only when method_c_applicable = true, otherwise 0).
 - chosen_method: "A", "B", "C", or a combination like "A+C".
 - When in doubt, round DOWN.
+- Remember: printed product images on cardboard are NOT inventory. Only count physical packages.
 """
 
 
-VERIFY_BOX_PROMPT = """\
-This is a close-up crop of a single display box on a store shelf. \
-Your ONLY job is to determine if this box contains actual product items or is empty.
+VERIFY_PROMPT_TEMPLATE = """\
+You previously analyzed this shelf photo and identified display box/tray positions. \
+Now RECOUNT the items at each position listed below. Focus on ACCURACY.
 
-CRITICAL: IGNORE all printed graphics, logos, and product images on the cardboard exterior. \
-Those are advertisements printed on the box walls, NOT real inventory items.
+For each position, find the display box/tray on the shelf and:
+1. Find the CUT LINE — the horizontal edge where the front cardboard was cut down.
+2. IGNORE everything BELOW the cut line — that is printed graphics on cardboard, NOT items.
+3. Count ONLY physical packages you can see ABOVE the cut line, INSIDE the box.
+4. If the interior above the cut line is DARK, SHADOWED, or shows empty cardboard → count = 0.
+5. Printed product images on the box exterior are NOT real packages.
 
-Look at the OPENING of the box and describe what you see through the opening:
-- Can you see a flat cardboard bottom with no items on it? → EMPTY
-- Is the interior hollow with visible cardboard floor? → EMPTY
-- Can you see individual wrapped/packaged items stacked or lying inside? → HAS ITEMS
-- Can you see depth/shadows suggesting items behind the front? → HAS ITEMS
-- Is there bumpy/uneven texture from multiple packages? → HAS ITEMS
+Positions to recount:
+{positions_list}
 
-Return ONLY valid JSON (no markdown, no commentary):
-{
-  "interior_description": "Describe what you physically see inside the box opening",
-  "is_empty": true,
-  "verified_count": 0,
-  "confidence": "high"
-}
-
-Rules:
-- interior_description: Describe ONLY what is physically inside the box, NOT exterior graphics.
-- is_empty: true if box is empty or nearly empty (0-2 items), false if it contains items.
-- verified_count: Number of individual items you can see inside (0 if empty).
-- confidence: "high", "medium", or "low".
+Return ONLY valid JSON (no markdown):
+{{
+  "recounts": [
+    {{"row": 1, "position": 1, "product_name": "...", "verified_count": 0, "reasoning": "what I see above the cut line"}}
+  ]
+}}
 """
-
-MAX_VERIFICATION_CALLS = 6
 
 
 def allowed_file(filename: str) -> bool:
@@ -268,8 +252,8 @@ def crop_region(path: str, bbox_pct: list) -> tuple:
     img = Image.open(path)
     w, h = img.size
 
-    # Convert percentages to pixels with 5% padding for imprecision
-    pad = 5
+    # Convert percentages to pixels with 2% padding
+    pad = 2
     left = max(0, int(w * (bbox_pct[0] - pad) / 100))
     top = max(0, int(h * (bbox_pct[1] - pad) / 100))
     right = min(w, int(w * (bbox_pct[2] + pad) / 100))
@@ -299,16 +283,31 @@ def crop_region(path: str, bbox_pct: list) -> tuple:
     return data, media_type
 
 
-def verify_display_box(client: anthropic.Anthropic, path: str, bbox_pct: list, product_name: str) -> dict:
-    """Send a cropped display box image to Claude for focused empty/stocked verification."""
-    try:
-        img_data, media_type = crop_region(path, bbox_pct)
-        if img_data is None:
-            return {"error": "crop_too_small", "is_empty": False, "confidence": "low"}
+def verify_tray_positions(client: anthropic.Anthropic, img_data: str, media_type: str,
+                          positions_to_check: list) -> dict:
+    """Send the full image again with a focused recount prompt for tray/box positions.
 
+    Returns a dict of (row, position) → verified_count.
+    """
+    if not positions_to_check:
+        return {}
+
+    # Build the positions list for the prompt
+    lines = []
+    for pos_info in positions_to_check:
+        row_num = pos_info["row"]
+        pos_num = pos_info["position"]
+        name = pos_info["product_name"]
+        orig_count = pos_info["original_count"]
+        lines.append(f"- Row {row_num}, Position {pos_num}: \"{name}\" (initial count: {orig_count})")
+
+    positions_text = "\n".join(lines)
+    prompt = VERIFY_PROMPT_TEMPLATE.replace("{positions_list}", positions_text)
+
+    try:
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1024,
+            max_tokens=8192,
             messages=[
                 {
                     "role": "user",
@@ -321,7 +320,7 @@ def verify_display_box(client: anthropic.Anthropic, path: str, bbox_pct: list, p
                                 "data": img_data,
                             },
                         },
-                        {"type": "text", "text": f"Product: {product_name}\n\n{VERIFY_BOX_PROMPT}"},
+                        {"type": "text", "text": prompt},
                     ],
                 }
             ],
@@ -332,64 +331,21 @@ def verify_display_box(client: anthropic.Anthropic, path: str, bbox_pct: list, p
             raw = raw.split("\n", 1)[1]
             if raw.endswith("```"):
                 raw = raw[: raw.rfind("```")]
-        return json.loads(raw)
+        parsed = json.loads(raw)
+
+        # Build lookup
+        result = {}
+        for item in parsed.get("recounts", []):
+            key = (item.get("row"), item.get("position"))
+            result[key] = {
+                "verified_count": item.get("verified_count", -1),
+                "reasoning": item.get("reasoning", ""),
+            }
+        return result
 
     except Exception as e:
-        print(f"Verification failed for {product_name}: {e}")
-        return {"error": str(e), "is_empty": False, "confidence": "low"}
-
-
-# Keywords that suggest the interior_description is about exterior graphics, not actual contents
-EXTERIOR_KEYWORDS = re.compile(
-    r"\b(logo|graphic|printed|picture|branding|brand image|product image|advertisement)\b",
-    re.IGNORECASE,
-)
-
-
-def needs_verification(pos: dict) -> bool:
-    """Check if a display box position needs a second-pass verification."""
-    if not pos.get("has_display_box", False):
-        return False
-    if pos.get("box_appears_empty", False):
-        return False  # Already flagged empty, no need to verify
-    if pos.get("estimated_count", 0) <= 2:
-        return False  # Low count already, not suspicious
-
-    # Check if bbox_pct is available and valid
-    bbox = pos.get("bbox_pct")
-    if not bbox or not isinstance(bbox, list) or len(bbox) != 4:
-        return False
-
-    # Check if interior_description is suspicious
-    desc = pos.get("interior_description", "")
-    if not desc or len(desc) < 15:
-        return True  # Missing or too vague — suspicious
-    if EXTERIOR_KEYWORDS.search(desc):
-        return True  # Describes exterior graphics — suspicious
-
-    return False
-
-
-def enforce_box_rules(pos: dict) -> None:
-    """Server-side enforcement of box emptiness rules on a position."""
-    if pos.get("box_appears_empty") is True:
-        pos["box_fill_assessment"] = "empty_box"
-        pos["method_a_count"] = 0
-        pos["method_b_count"] = 0
-        pos["estimated_count"] = 0
-        pos["method_b_fullness_pct"] = 0
-
-    bfa = pos.get("box_fill_assessment", "")
-    if bfa == "empty_box":
-        pos["method_a_count"] = 0
-        pos["method_b_count"] = 0
-        pos["estimated_count"] = 0
-        pos["method_b_fullness_pct"] = 0
-    elif bfa == "nearly_empty":
-        pos["method_a_count"] = min(pos.get("method_a_count", 2), 2)
-        pos["method_b_count"] = min(pos.get("method_b_count", 2), 2)
-        pos["estimated_count"] = min(pos.get("estimated_count", 2), 2)
-        pos["method_b_fullness_pct"] = min(pos.get("method_b_fullness_pct", 15), 15)
+        print(f"Verification pass failed: {e}")
+        return {}
 
 
 def analyze_image(path: str) -> dict:
@@ -430,7 +386,7 @@ def analyze_image(path: str) -> dict:
     print(json.dumps(parsed, indent=2)[:3000])
     print("=== End Response ===")
 
-    # ── Pass 1 normalization: ensure all fields exist with defaults ──
+    # ── Pass 1: Normalize fields ──
     for row in parsed.get("rows", []):
         for pos in row.get("positions", []):
             pos.setdefault("method_a_count", pos.get("estimated_count"))
@@ -444,88 +400,183 @@ def analyze_image(path: str) -> dict:
             pos.setdefault("method_c_count", None)
             pos.setdefault("chosen_method", "A")
             pos.setdefault("counting_notes", "")
-            pos.setdefault("has_display_box", False)
-            pos.setdefault("box_appears_empty", False)
-            pos.setdefault("box_fill_assessment", "not_a_box")
-            pos.setdefault("interior_description", "")
-            pos.setdefault("bbox_pct", None)
             pos.setdefault("verification_status", None)
 
-            # First pass enforcement
-            enforce_box_rules(pos)
-
-    # ── Pass 2: Verify suspicious display boxes with cropped images ──
-    suspicious = []
+    # ── Pass 2: Recount tray/box positions with focused prompt ──
+    # Collect all tray/box/bin positions for re-verification
+    positions_to_check = []
+    pos_lookup = {}  # (row_num, pos_num) → pos dict
     for row in parsed.get("rows", []):
         for pos in row.get("positions", []):
-            if needs_verification(pos):
-                suspicious.append(pos)
+            disp = pos.get("display_type", "shelf")
+            count = pos.get("estimated_count", 0)
+            row_num = row.get("row_number")
+            pos_num = pos.get("position")
+            # Verify all tray/box/bin positions with count >= 1
+            if disp in ("tray", "box", "bin") and count >= 1:
+                positions_to_check.append({
+                    "row": row_num,
+                    "position": pos_num,
+                    "product_name": pos.get("product_name", "Unknown"),
+                    "original_count": count,
+                })
+                pos_lookup[(row_num, pos_num)] = pos
 
-    # Cap verification calls
-    suspicious = sorted(suspicious, key=lambda p: p.get("estimated_count", 0), reverse=True)
-    suspicious = suspicious[:MAX_VERIFICATION_CALLS]
+    if positions_to_check:
+        print(f"=== Verification Pass: recounting {len(positions_to_check)} tray/box position(s) ===")
+        for p in positions_to_check:
+            print(f"  Row {p['row']} Pos {p['position']}: {p['product_name'][:40]} (count={p['original_count']})")
 
-    if suspicious:
-        print(f"=== Verification Pass: {len(suspicious)} display box(es) to verify ===")
+        recount_results = verify_tray_positions(client, img_data, media_type, positions_to_check)
+
+        for key, result in recount_results.items():
+            pos = pos_lookup.get(key)
+            if not pos:
+                continue
+            verified_count = result.get("verified_count", -1)
+            reasoning = result.get("reasoning", "")
+            if verified_count < 0:
+                pos["verification_status"] = "error"
+                continue
+
+            original = pos.get("estimated_count", 0)
+            # Use the lower of original and verified — the recount with cutline
+            # focus tends to be more accurate for display boxes
+            if verified_count < original:
+                pos["original_estimated_count"] = original
+                pos["estimated_count"] = verified_count
+                pos["verification_status"] = "adjusted"
+                pos["verification_reasoning"] = reasoning
+                print(f"  Adjusted Row {key[0]} Pos {key[1]}: {original} → {verified_count} ({reasoning[:60]})")
+            else:
+                pos["verification_status"] = "confirmed"
+                print(f"  Confirmed Row {key[0]} Pos {key[1]}: {original} (verified={verified_count})")
+
+    # ── Pass 3: Grid-crop verification for positions still showing high counts ──
+    # After the full-image recount, any tray/box still showing count >= 3 gets
+    # a cropped close-up check. The crop gives Claude higher resolution to see
+    # inside the box opening, which catches cases the full-image passes miss.
+    total_rows = len(parsed.get("rows", []))
+    crop_candidates = []
+    for row_index, row in enumerate(parsed.get("rows", [])):
+        for pos in row.get("positions", []):
+            disp = pos.get("display_type", "shelf")
+            count = pos.get("estimated_count", 0)
+            if disp in ("tray", "box", "bin") and count >= 3:
+                # Compute grid-based crop coordinates
+                positions_in_row = row.get("positions", [])
+                num_positions = len(positions_in_row)
+                if num_positions == 0:
+                    continue
+
+                # Vertical band for this row
+                shelf_top = 15.0
+                shelf_bot = 92.0
+                row_height = (shelf_bot - shelf_top) / total_rows
+                top_pct = shelf_top + (row_index * row_height)
+                bot_pct = top_pct + row_height
+
+                # Horizontal column for this position
+                pos_index = pos.get("position", 1) - 1
+                col_width = 100.0 / num_positions
+                left_pct = pos_index * col_width
+                right_pct = left_pct + col_width
+
+                # Add padding
+                pad_h = col_width * 0.15
+                pad_v = row_height * 0.15
+                bbox = [
+                    round(max(0, left_pct - pad_h), 1),
+                    round(max(0, top_pct - pad_v), 1),
+                    round(min(100, right_pct + pad_h), 1),
+                    round(min(100, bot_pct + pad_v), 1),
+                ]
+                crop_candidates.append((pos, bbox, row))
+
+    # Cap and sort by count descending
+    crop_candidates.sort(key=lambda x: x[0].get("estimated_count", 0), reverse=True)
+    crop_candidates = crop_candidates[:12]
+
+    if crop_candidates:
+        print(f"=== Pass 3: Grid-crop verification for {len(crop_candidates)} position(s) ===")
+
+        CROP_VERIFY_PROMPT = (
+            "This is a close-up of a product position on a store shelf. "
+            "If there is a display box/tray with a cutout, find the CUT LINE. "
+            "BELOW the cut line = printed graphics (IGNORE). "
+            "ABOVE the cut line = interior. Count ONLY physical packages INSIDE, above the cut line. "
+            "If interior is dark/shadowed/empty → count = 0. "
+            "Return ONLY JSON: {\"verified_count\": 0, \"reasoning\": \"what I see\"}"
+        )
+
+        def _crop_verify(pos_info):
+            pos, bbox, row = pos_info
+            try:
+                cropped_data, cropped_media = crop_region(path, bbox)
+                if cropped_data is None:
+                    return pos, {"verified_count": -1, "error": "crop_too_small"}
+
+                resp = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=512,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": cropped_media, "data": cropped_data}},
+                            {"type": "text", "text": f"Product: {pos.get('product_name', 'Unknown')}\n\n{CROP_VERIFY_PROMPT}"},
+                        ],
+                    }],
+                )
+                raw = resp.content[0].text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1]
+                    if raw.endswith("```"):
+                        raw = raw[:raw.rfind("```")]
+                return pos, json.loads(raw)
+            except Exception as e:
+                print(f"  Crop verify failed for {pos.get('product_name', '?')[:30]}: {e}")
+                return pos, {"verified_count": -1, "error": str(e)}
+
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                future_to_pos = {}
-                for pos in suspicious:
-                    future = executor.submit(
-                        verify_display_box,
-                        client,
-                        path,
-                        pos["bbox_pct"],
-                        pos.get("product_name", "Unknown"),
-                    )
-                    future_to_pos[future] = pos
-
-                for future in concurrent.futures.as_completed(future_to_pos, timeout=60):
-                    pos = future_to_pos[future]
-                    result = future.result()
-                    print(f"  Verified '{pos.get('product_name')}': {json.dumps(result)}")
-
-                    if result.get("error"):
-                        pos["verification_status"] = "error"
+                futures = [executor.submit(_crop_verify, c) for c in crop_candidates]
+                for future in concurrent.futures.as_completed(futures, timeout=90):
+                    pos, result = future.result()
+                    crop_count = result.get("verified_count", -1)
+                    reasoning = result.get("reasoning", "")
+                    if crop_count < 0:
                         continue
 
-                    confidence = result.get("confidence", "low")
-                    if result.get("is_empty") and confidence in ("high", "medium"):
-                        # Override: box is actually empty
-                        pos["original_estimated_count"] = pos.get("estimated_count", 0)
-                        pos["box_appears_empty"] = True
-                        pos["box_fill_assessment"] = "empty_box"
-                        verified_count = result.get("verified_count", 0)
-                        pos["estimated_count"] = min(verified_count, 2)
-                        pos["verification_status"] = "overridden_by_crop_check"
-                        pos["interior_description"] = result.get(
-                            "interior_description", pos.get("interior_description", "")
-                        )
-                        # Re-enforce box rules after override
-                        enforce_box_rules(pos)
+                    current = pos.get("estimated_count", 0)
+                    if crop_count < current:
+                        if "original_estimated_count" not in pos:
+                            pos["original_estimated_count"] = current
+                        pos["estimated_count"] = crop_count
+                        pos["verification_status"] = "crop_adjusted"
+                        pos["verification_reasoning"] = reasoning
+                        print(f"  Crop adjusted '{pos.get('product_name','?')[:35]}': {current} → {crop_count} ({reasoning[:60]})")
                     else:
-                        pos["verification_status"] = "confirmed_stocked"
+                        if pos.get("verification_status") != "adjusted":
+                            pos["verification_status"] = "confirmed"
+                        print(f"  Crop confirmed '{pos.get('product_name','?')[:35]}': {current} (crop={crop_count})")
 
         except concurrent.futures.TimeoutError:
-            print("=== Verification timed out — using pass 1 results for remaining ===")
-            for future, pos in future_to_pos.items():
-                if not future.done():
-                    pos["verification_status"] = "timeout"
+            print("=== Crop verification timed out ===")
         except Exception as e:
-            print(f"=== Verification error: {e} ===")
+            print(f"=== Crop verification error: {e} ===")
 
-    # Recalculate summary totals after verification overrides
+    # Recalculate summary totals
     total_items = 0
     total_skus = 0
-    total_rows = 0
+    row_count = 0
     for row in parsed.get("rows", []):
-        total_rows += 1
+        row_count += 1
         for pos in row.get("positions", []):
             total_skus += 1
             total_items += pos.get("estimated_count", 0)
 
     parsed["summary"] = {
-        "total_rows": total_rows,
+        "total_rows": row_count,
         "total_distinct_skus": total_skus,
         "total_items": total_items,
     }

@@ -517,38 +517,21 @@ function renderResults(data) {
       const geoInfo = (spaceDepth != null && pkgDepth != null)
         ? `<span class="peg-info">${dispType}: ${spaceDepth}" deep / ${pkgDepth}" pkg</span>`
         : '';
-      const bfa = pos.box_fill_assessment || '';
-      const bfaColors = {
-        'empty_box': '#dc3545', 'nearly_empty': '#fd7e14',
-        'partially_filled': '#ffc107', 'well_stocked': '#28a745',
-        'items_visible': '#17a2b8', 'not_a_box': '#6c757d'
-      };
-      const bfaTag = (bfa && bfa !== 'not_a_box')
-        ? `<span style="background:${bfaColors[bfa]||'#6c757d'};color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;margin-left:4px">${bfa.replace(/_/g,' ')}</span>`
-        : '';
-
-      // Verification status badge
+      // Verification status
       const verStatus = pos.verification_status || '';
       let verTag = '';
-      if (verStatus === 'overridden_by_crop_check') {
-        verTag = '<span class="ver-tag verified-empty">VERIFIED EMPTY</span>';
-      } else if (verStatus === 'confirmed_stocked') {
-        verTag = '<span class="ver-tag verified-stocked">VERIFIED</span>';
-      } else if (verStatus === 'timeout') {
-        verTag = '<span class="ver-tag verified-timeout">TIMEOUT</span>';
+      if (verStatus === 'adjusted' || verStatus === 'crop_adjusted') {
+        verTag = `<span class="ver-tag verified-empty">ADJUSTED</span>`;
+      } else if (verStatus === 'confirmed') {
+        verTag = '<span class="ver-tag verified-stocked">CONFIRMED</span>';
       }
 
-      // Show strikethrough original count if verification overrode it
+      // Show strikethrough original count if verification adjusted it
       const origCount = pos.original_estimated_count;
-      const wasOverridden = origCount !== undefined && origCount !== pos.estimated_count;
-      const countDisplay = wasOverridden
+      const wasAdjusted = origCount !== undefined && origCount !== pos.estimated_count;
+      const countDisplay = wasAdjusted
         ? `<span class="original-count">&times;${origCount}</span>&times;${v(pos.estimated_count)}`
         : `&times;${v(pos.estimated_count)}`;
-
-      // Interior description for display boxes
-      const interiorDesc = pos.interior_description
-        ? `<div class="interior-desc">Interior: ${escHtml(pos.interior_description)}</div>`
-        : '';
 
       // Frame counts info (for video multi-frame analysis)
       const frameCounts = pos.frame_counts;
@@ -562,7 +545,7 @@ function renderResults(data) {
           <div class="product-top">
             <span class="pos-badge">Pos ${pos.position}</span>
             <span class="product-name">${escHtml(pos.product_name)}</span>
-            ${minTag}${bfaTag}${verTag}
+            ${minTag}${verTag}
             <span class="product-count" id="count-${cardId}">${countDisplay}</span>
           </div>
           <div class="method-details">
@@ -573,7 +556,7 @@ function renderResults(data) {
             ${geoInfo}
           </div>
           ${pos.counting_notes ? `<div class="counting-notes">${escHtml(pos.counting_notes)}</div>` : ''}
-          ${interiorDesc}
+
         </div>`;
     }
     html += `</div>`;
