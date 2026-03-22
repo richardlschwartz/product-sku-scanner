@@ -351,7 +351,7 @@
   <div class="panels" id="panels" style="display:none;">
     <!-- Photo panel — left -->
     <div class="panel" id="photoPanel">
-      <div class="panel-header">Photo</div>
+      <div class="panel-header" id="photo-header">Photo</div>
       <div class="panel-body" id="image-display">
         <span class="placeholder">No image loaded</span>
       </div>
@@ -406,6 +406,9 @@ function handleFile(file) {
   dropZone.style.display = 'none';
   panels.style.display = 'grid';
   newImageBtn.style.display = 'inline-block';
+
+  // Show filename in panel header
+  document.getElementById('photo-header').textContent = file.name;
 
   const url = URL.createObjectURL(file);
   const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(file.name);
@@ -517,21 +520,7 @@ function renderResults(data) {
       const geoInfo = (spaceDepth != null && pkgDepth != null)
         ? `<span class="peg-info">${dispType}: ${spaceDepth}" deep / ${pkgDepth}" pkg</span>`
         : '';
-      // Verification status
-      const verStatus = pos.verification_status || '';
-      let verTag = '';
-      if (verStatus === 'adjusted' || verStatus === 'crop_adjusted') {
-        verTag = `<span class="ver-tag verified-empty">ADJUSTED</span>`;
-      } else if (verStatus === 'confirmed') {
-        verTag = '<span class="ver-tag verified-stocked">CONFIRMED</span>';
-      }
-
-      // Show strikethrough original count if verification adjusted it
-      const origCount = pos.original_estimated_count;
-      const wasAdjusted = origCount !== undefined && origCount !== pos.estimated_count;
-      const countDisplay = wasAdjusted
-        ? `<span class="original-count">&times;${origCount}</span>&times;${v(pos.estimated_count)}`
-        : `&times;${v(pos.estimated_count)}`;
+      const countDisplay = `&times;${v(pos.estimated_count)}`;
 
       // Frame counts info (for video multi-frame analysis)
       const frameCounts = pos.frame_counts;
@@ -545,7 +534,7 @@ function renderResults(data) {
           <div class="product-top">
             <span class="pos-badge">Pos ${pos.position}</span>
             <span class="product-name">${escHtml(pos.product_name)}</span>
-            ${minTag}${verTag}
+            ${minTag}
             <span class="product-count" id="count-${cardId}">${countDisplay}</span>
           </div>
           <div class="method-details">

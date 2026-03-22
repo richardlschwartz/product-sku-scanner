@@ -34,6 +34,38 @@ and estimate the count of INDIVIDUAL SELLABLE PACKAGES at each position.
 
 Scan from TOP-LEFT to BOTTOM-RIGHT, row by row. A "row" is a horizontal shelf level.
 
+=== ROW DETECTION ===
+
+BEFORE identifying any products, first identify the ROWS (horizontal shelf levels) \
+by looking for these physical landmarks:
+  - SHELF DIVIDERS: horizontal surfaces (metal, wire, or wood shelves) that products sit on
+  - PRICE TAGS / PRICE LABELS: small tags attached to the FRONT EDGE of shelf dividers. \
+    Price tags are ALWAYS mounted on shelf edges, so a horizontal line of price tags = one \
+    shelf divider = the boundary between two rows
+  - SHELF EDGES: the visible front lip or rail of each shelf level
+
+Count rows from TOP to BOTTOM:
+  - Row 1 = the topmost shelf level (products sitting on the highest shelf divider)
+  - Row 2 = the next shelf level down, and so on
+  - Each horizontal shelf divider with products above it defines the BOTTOM of one row \
+    and the TOP of the next
+  - Products on the SAME physical shelf surface = same row, even if they are at \
+    slightly different heights (e.g., tall vs short packages on the same shelf)
+  - Do NOT split a single shelf into multiple rows just because products vary in height
+
+=== POSITION ORDERING ===
+
+Positions within each row MUST be numbered strictly LEFT to RIGHT based on their \
+physical location in the image:
+  - Position 1 = the leftmost product/bin/container in that row
+  - Position 2 = the next one to the right, and so on
+  - Use the physical containers (bins, crates, boxes, trays) as your guide — count \
+    them left to right and assign position numbers in that order
+  - For produce displays: each separate bin, crate, or compartment = one position. \
+    Number them by their physical left-to-right order on the shelf
+  - Do NOT group by product type — if lemons are in the leftmost bin, they are Position 1 \
+    even if oranges appear in multiple bins to the right
+
 === WHAT TO COUNT ===
 
 Count ONLY individual wrapped/packaged items that a customer could pick up and buy. \
@@ -204,7 +236,7 @@ def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
 
 
-MAX_IMAGE_BYTES = 4_800_000  # stay under Claude's 5 MB base64 limit
+MAX_BASE64_CHARS = 5_000_000  # Claude's 5 MB limit is on the base64 STRING, not decoded bytes
 
 
 def encode_image(path: str) -> tuple:
@@ -212,11 +244,12 @@ def encode_image(path: str) -> tuple:
     ext = os.path.splitext(path)[1].lower()
     img = Image.open(path)
 
-    # Determine output format — use JPEG for photos (smaller), PNG for others
-    if ext in (".jpg", ".jpeg"):
-        out_fmt, media_type = "JPEG", "image/jpeg"
-    else:
+    # Always use JPEG for encoding — much smaller for photos
+    # Only keep PNG for images with alpha transparency
+    if ext in (".png",) and img.mode == "RGBA":
         out_fmt, media_type = "PNG", "image/png"
+    else:
+        out_fmt, media_type = "JPEG", "image/jpeg"
 
     def _encode(image, fmt, quality=85):
         buf = BytesIO()
@@ -229,16 +262,14 @@ def encode_image(path: str) -> tuple:
 
     # Try encoding at original size first
     data = _encode(img, out_fmt)
-    raw_size = len(base64.b64decode(data))
 
-    # If too large, progressively downscale
+    # If too large, progressively downscale (check base64 STRING length, not decoded bytes)
     scale = 1.0
-    while raw_size > MAX_IMAGE_BYTES and scale > 0.15:
+    while len(data) > MAX_BASE64_CHARS and scale > 0.15:
         scale *= 0.75
         new_size = (int(img.width * scale), int(img.height * scale))
         resized = img.resize(new_size, Image.LANCZOS)
         data = _encode(resized, out_fmt, quality=80)
-        raw_size = len(base64.b64decode(data))
 
     return data, media_type
 
@@ -272,14 +303,24 @@ def crop_region(path: str, bbox_pct: list) -> tuple:
     else:
         out_fmt, media_type = "PNG", "image/png"
 
-    buf = BytesIO()
-    if out_fmt == "JPEG":
-        cropped = cropped.convert("RGB")
-        cropped.save(buf, format=out_fmt, quality=85, optimize=True)
-    else:
-        cropped.save(buf, format=out_fmt, optimize=True)
+    # Always use JPEG for crops (smaller)
+    out_fmt, media_type = "JPEG", "image/jpeg"
 
-    data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+    def _encode_crop(image, quality=85):
+        buf = BytesIO()
+        image.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+        return base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+
+    data = _encode_crop(cropped)
+
+    # Downscale if crop exceeds size limit (check base64 STRING length)
+    scale = 1.0
+    while len(data) > MAX_BASE64_CHARS and scale > 0.2:
+        scale *= 0.75
+        new_size = (int(cropped.width * scale), int(cropped.height * scale))
+        resized = cropped.resize(new_size, Image.LANCZOS)
+        data = _encode_crop(resized, quality=80)
+
     return data, media_type
 
 
@@ -401,169 +442,6 @@ def analyze_image(path: str) -> dict:
             pos.setdefault("chosen_method", "A")
             pos.setdefault("counting_notes", "")
             pos.setdefault("verification_status", None)
-
-    # ── Pass 2: Recount tray/box positions with focused prompt ──
-    # Collect all tray/box/bin positions for re-verification
-    positions_to_check = []
-    pos_lookup = {}  # (row_num, pos_num) → pos dict
-    for row in parsed.get("rows", []):
-        for pos in row.get("positions", []):
-            disp = pos.get("display_type", "shelf")
-            count = pos.get("estimated_count", 0)
-            row_num = row.get("row_number")
-            pos_num = pos.get("position")
-            # Verify all tray/box/bin positions with count >= 1
-            if disp in ("tray", "box", "bin") and count >= 1:
-                positions_to_check.append({
-                    "row": row_num,
-                    "position": pos_num,
-                    "product_name": pos.get("product_name", "Unknown"),
-                    "original_count": count,
-                })
-                pos_lookup[(row_num, pos_num)] = pos
-
-    if positions_to_check:
-        print(f"=== Verification Pass: recounting {len(positions_to_check)} tray/box position(s) ===")
-        for p in positions_to_check:
-            print(f"  Row {p['row']} Pos {p['position']}: {p['product_name'][:40]} (count={p['original_count']})")
-
-        recount_results = verify_tray_positions(client, img_data, media_type, positions_to_check)
-
-        for key, result in recount_results.items():
-            pos = pos_lookup.get(key)
-            if not pos:
-                continue
-            verified_count = result.get("verified_count", -1)
-            reasoning = result.get("reasoning", "")
-            if verified_count < 0:
-                pos["verification_status"] = "error"
-                continue
-
-            original = pos.get("estimated_count", 0)
-            # Use the lower of original and verified — the recount with cutline
-            # focus tends to be more accurate for display boxes
-            if verified_count < original:
-                pos["original_estimated_count"] = original
-                pos["estimated_count"] = verified_count
-                pos["verification_status"] = "adjusted"
-                pos["verification_reasoning"] = reasoning
-                print(f"  Adjusted Row {key[0]} Pos {key[1]}: {original} → {verified_count} ({reasoning[:60]})")
-            else:
-                pos["verification_status"] = "confirmed"
-                print(f"  Confirmed Row {key[0]} Pos {key[1]}: {original} (verified={verified_count})")
-
-    # ── Pass 3: Grid-crop verification for positions still showing high counts ──
-    # After the full-image recount, any tray/box still showing count >= 3 gets
-    # a cropped close-up check. The crop gives Claude higher resolution to see
-    # inside the box opening, which catches cases the full-image passes miss.
-    total_rows = len(parsed.get("rows", []))
-    crop_candidates = []
-    for row_index, row in enumerate(parsed.get("rows", [])):
-        for pos in row.get("positions", []):
-            disp = pos.get("display_type", "shelf")
-            count = pos.get("estimated_count", 0)
-            if disp in ("tray", "box", "bin") and count >= 3:
-                # Compute grid-based crop coordinates
-                positions_in_row = row.get("positions", [])
-                num_positions = len(positions_in_row)
-                if num_positions == 0:
-                    continue
-
-                # Vertical band for this row
-                shelf_top = 15.0
-                shelf_bot = 92.0
-                row_height = (shelf_bot - shelf_top) / total_rows
-                top_pct = shelf_top + (row_index * row_height)
-                bot_pct = top_pct + row_height
-
-                # Horizontal column for this position
-                pos_index = pos.get("position", 1) - 1
-                col_width = 100.0 / num_positions
-                left_pct = pos_index * col_width
-                right_pct = left_pct + col_width
-
-                # Add padding
-                pad_h = col_width * 0.15
-                pad_v = row_height * 0.15
-                bbox = [
-                    round(max(0, left_pct - pad_h), 1),
-                    round(max(0, top_pct - pad_v), 1),
-                    round(min(100, right_pct + pad_h), 1),
-                    round(min(100, bot_pct + pad_v), 1),
-                ]
-                crop_candidates.append((pos, bbox, row))
-
-    # Cap and sort by count descending
-    crop_candidates.sort(key=lambda x: x[0].get("estimated_count", 0), reverse=True)
-    crop_candidates = crop_candidates[:12]
-
-    if crop_candidates:
-        print(f"=== Pass 3: Grid-crop verification for {len(crop_candidates)} position(s) ===")
-
-        CROP_VERIFY_PROMPT = (
-            "This is a close-up of a product position on a store shelf. "
-            "If there is a display box/tray with a cutout, find the CUT LINE. "
-            "BELOW the cut line = printed graphics (IGNORE). "
-            "ABOVE the cut line = interior. Count ONLY physical packages INSIDE, above the cut line. "
-            "If interior is dark/shadowed/empty → count = 0. "
-            "Return ONLY JSON: {\"verified_count\": 0, \"reasoning\": \"what I see\"}"
-        )
-
-        def _crop_verify(pos_info):
-            pos, bbox, row = pos_info
-            try:
-                cropped_data, cropped_media = crop_region(path, bbox)
-                if cropped_data is None:
-                    return pos, {"verified_count": -1, "error": "crop_too_small"}
-
-                resp = client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=512,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": cropped_media, "data": cropped_data}},
-                            {"type": "text", "text": f"Product: {pos.get('product_name', 'Unknown')}\n\n{CROP_VERIFY_PROMPT}"},
-                        ],
-                    }],
-                )
-                raw = resp.content[0].text.strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[1]
-                    if raw.endswith("```"):
-                        raw = raw[:raw.rfind("```")]
-                return pos, json.loads(raw)
-            except Exception as e:
-                print(f"  Crop verify failed for {pos.get('product_name', '?')[:30]}: {e}")
-                return pos, {"verified_count": -1, "error": str(e)}
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(_crop_verify, c) for c in crop_candidates]
-                for future in concurrent.futures.as_completed(futures, timeout=90):
-                    pos, result = future.result()
-                    crop_count = result.get("verified_count", -1)
-                    reasoning = result.get("reasoning", "")
-                    if crop_count < 0:
-                        continue
-
-                    current = pos.get("estimated_count", 0)
-                    if crop_count < current:
-                        if "original_estimated_count" not in pos:
-                            pos["original_estimated_count"] = current
-                        pos["estimated_count"] = crop_count
-                        pos["verification_status"] = "crop_adjusted"
-                        pos["verification_reasoning"] = reasoning
-                        print(f"  Crop adjusted '{pos.get('product_name','?')[:35]}': {current} → {crop_count} ({reasoning[:60]})")
-                    else:
-                        if pos.get("verification_status") != "adjusted":
-                            pos["verification_status"] = "confirmed"
-                        print(f"  Crop confirmed '{pos.get('product_name','?')[:35]}': {current} (crop={crop_count})")
-
-        except concurrent.futures.TimeoutError:
-            print("=== Crop verification timed out ===")
-        except Exception as e:
-            print(f"=== Crop verification error: {e} ===")
 
     # Recalculate summary totals
     total_items = 0
