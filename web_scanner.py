@@ -209,25 +209,97 @@ Rules:
 """
 
 
-VERIFY_PROMPT_TEMPLATE = """\
-You previously analyzed this shelf photo and identified display box/tray positions. \
-Now RECOUNT the items at each position listed below. Focus on ACCURACY.
+STRUCTURE_PROMPT = """\
+You are analyzing a product shelf or display photo. Your ONLY job is to identify \
+the SPATIAL LAYOUT — which shelf level each product sits on, and the left-to-right \
+order within each shelf. Do NOT count items yet.
 
-For each position, find the display box/tray on the shelf and:
-1. Find the CUT LINE — the horizontal edge where the front cardboard was cut down.
-2. IGNORE everything BELOW the cut line — that is printed graphics on cardboard, NOT items.
-3. Count ONLY physical packages you can see ABOVE the cut line, INSIDE the box.
-4. If the interior above the cut line is DARK, SHADOWED, or shows empty cardboard → count = 0.
-5. Printed product images on the box exterior are NOT real packages.
+=== HOW TO IDENTIFY ROWS (SHELF LEVELS) ===
 
-Positions to recount:
-{positions_list}
+Look for these physical landmarks to find shelf boundaries:
+  - SHELF DIVIDERS: horizontal surfaces (metal, wire, or wood) that products sit on
+  - PRICE TAGS: small tags attached to the FRONT EDGE of shelf dividers. \
+    A horizontal line of price tags = one shelf edge = boundary between rows
+  - SHELF LIPS/RAILS: the visible front edge of each shelf level
+
+Number rows from TOP to BOTTOM:
+  - Row 1 = the topmost shelf with products
+  - Row 2 = next shelf down, etc.
+  - Products on the SAME physical shelf surface = same row
+
+=== HOW TO IDENTIFY POSITIONS (LEFT TO RIGHT) ===
+
+Within each row, list products strictly LEFT to RIGHT:
+  - Position 1 = leftmost product/bin/container
+  - Position 2 = next one to the right, etc.
+  - Use physical containers (bins, crates, boxes, trays, pegs) as guides
+
+Return ONLY valid JSON (no markdown):
+{
+  "shelf_structure": [
+    {
+      "row_number": 1,
+      "shelf_landmark": "description of what marks this shelf level (e.g., 'top shelf above first price tag row')",
+      "positions": [
+        {"position": 1, "product_name": "Brand Product Description", "display_type": "shelf"},
+        {"position": 2, "product_name": "Brand Product Description", "display_type": "tray"}
+      ]
+    }
+  ]
+}
+
+Rules:
+- display_type: "peg", "shelf", "bin", "tray", "hook", "slot"
+- Be specific with product names (brand, variant, size if readable)
+- If you cannot read the label, describe visually (e.g., "Red package, unknown brand")
+- Focus on getting the ROW assignments correct — which shelf is each product on?
+- Focus on getting the POSITION order correct — left to right within each row
+"""
+
+
+COUNTING_PROMPT_TEMPLATE = """\
+You previously identified the shelf structure of this photo. Now COUNT the items \
+at each position. The structure is already determined — do not change the row or \
+position assignments.
+
+Here is the shelf structure you identified:
+{structure}
+
+For EACH position listed above, count the individual sellable packages using \
+three methods:
+
+{counting_instructions}
 
 Return ONLY valid JSON (no markdown):
 {{
-  "recounts": [
-    {{"row": 1, "position": 1, "product_name": "...", "verified_count": 0, "reasoning": "what I see above the cut line"}}
-  ]
+  "rows": [
+    {{
+      "row_number": 1,
+      "positions": [
+        {{
+          "position": 1,
+          "product_name": "same name from structure",
+          "display_type": "shelf",
+          "method_a_count": 4,
+          "space_depth_inches": 10,
+          "package_depth_inches": 1.5,
+          "method_b_capacity": 6,
+          "method_b_fullness_pct": 50,
+          "method_b_count": 3,
+          "method_c_applicable": true,
+          "method_c_count": 3,
+          "chosen_method": "C",
+          "estimated_count": 3,
+          "counting_notes": "3 packages visible. Top edges confirm 3."
+        }}
+      ]
+    }}
+  ],
+  "summary": {{
+    "total_rows": 3,
+    "total_distinct_skus": 10,
+    "total_items": 45
+  }}
 }}
 """
 
@@ -389,45 +461,101 @@ def verify_tray_positions(client: anthropic.Anthropic, img_data: str, media_type
         return {}
 
 
-def analyze_image(path: str) -> dict:
-    """Send the image to Claude Vision and return parsed JSON results."""
-    client = anthropic.Anthropic()
-    img_data, media_type = encode_image(path)
-
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=16384,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": img_data,
-                        },
-                    },
-                    {"type": "text", "text": VISION_PROMPT},
-                ],
-            }
-        ],
-    )
-
-    raw = response.content[0].text.strip()
+def _parse_json_response(raw: str) -> dict:
+    """Strip markdown fences and parse JSON from Claude's response."""
+    raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         if raw.endswith("```"):
             raw = raw[: raw.rfind("```")]
-    parsed = json.loads(raw)
+    return json.loads(raw)
+
+
+# Counting instructions shared between single-pass and two-pass modes
+COUNTING_INSTRUCTIONS = """\
+Count ONLY individual wrapped/packaged items that a customer could pick up and buy.
+
+CRITICAL — CARDBOARD DISPLAY BOXES AND TRAYS:
+If a product sits in a cardboard display box/tray with a CUTOUT front panel:
+1. Find the CUT LINE — the horizontal edge where the front cardboard was cut down.
+2. IGNORE everything BELOW the cut line — that is printed graphics, NOT items.
+3. Count ONLY physical packages ABOVE the cut line, INSIDE the box.
+4. If interior is dark/shadowed/empty cardboard → count = 0.
+
+Method A — Direct visual count:
+  - Count each individual wrapped/packaged item visible as a distinct physical object.
+  - For items behind the front row, estimate based on visible depth and shadows.
+
+Method B — Capacity-based estimate:
+  - Estimate space depth in inches (rod length, shelf depth, tray depth).
+  - Estimate one package's depth in inches.
+  - capacity = floor(space_depth / package_depth).
+  - Estimate fullness (0-100%). method_b_count = round(capacity * fullness / 100).
+
+Method C — Top-edge count (INDEPENDENT of A and B):
+  - If the camera angle shows top edges of packages front-to-back, count them.
+  - Each distinct top edge = one item. If higher than A or B, prefer C.
+
+Final estimated_count: compare all methods. If C is higher, prefer C. \
+If A and B only, choose the lower. When in doubt, round DOWN. \
+If 0 packages visible, count = 0.
+"""
+
+
+def analyze_image(path: str) -> dict:
+    """Send the image to Claude Vision using two passes:
+    Pass 1: Identify shelf structure (rows and positions)
+    Pass 2: Count items at each position using the structure from Pass 1
+    """
+    client = anthropic.Anthropic()
+    img_data, media_type = encode_image(path)
+
+    image_block = {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": img_data},
+    }
+
+    # ── Pass 1: Structure ──
+    print("=== Pass 1: Identifying shelf structure ===")
+    response1 = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
+        messages=[{"role": "user", "content": [image_block, {"type": "text", "text": STRUCTURE_PROMPT}]}],
+    )
+    structure = _parse_json_response(response1.content[0].text)
+    print(f"Structure: {json.dumps(structure, indent=2)[:2000]}")
+
+    # Build a readable structure summary for Pass 2
+    structure_lines = []
+    for shelf in structure.get("shelf_structure", []):
+        row_num = shelf.get("row_number", "?")
+        landmark = shelf.get("shelf_landmark", "")
+        structure_lines.append(f"Row {row_num} ({landmark}):")
+        for pos in shelf.get("positions", []):
+            pos_num = pos.get("position", "?")
+            name = pos.get("product_name", "Unknown")
+            disp = pos.get("display_type", "shelf")
+            structure_lines.append(f"  Position {pos_num}: {name} (display_type: {disp})")
+    structure_text = "\n".join(structure_lines)
+
+    # ── Pass 2: Count ──
+    print("=== Pass 2: Counting items ===")
+    counting_prompt = COUNTING_PROMPT_TEMPLATE.replace("{structure}", structure_text)
+    counting_prompt = counting_prompt.replace("{counting_instructions}", COUNTING_INSTRUCTIONS)
+
+    response2 = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=16384,
+        messages=[{"role": "user", "content": [image_block, {"type": "text", "text": counting_prompt}]}],
+    )
+    parsed = _parse_json_response(response2.content[0].text)
 
     # Log raw response for debugging
-    print("=== Claude Response ===")
+    print("=== Claude Counting Response ===")
     print(json.dumps(parsed, indent=2)[:3000])
     print("=== End Response ===")
 
-    # ── Pass 1: Normalize fields ──
+    # ── Normalize fields ──
     for row in parsed.get("rows", []):
         for pos in row.get("positions", []):
             pos.setdefault("method_a_count", pos.get("estimated_count"))
